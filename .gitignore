@@ -1,0 +1,9 @@
+*.pyc
+__pycache__/
+*.db
+.env
+node_modules/
+.expo/
+venv/
+server.log
+dist/
