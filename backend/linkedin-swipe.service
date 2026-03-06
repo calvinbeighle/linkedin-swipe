@@ -1,0 +1,15 @@
+[Unit]
+Description=LinkedIn Swipe API
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/linkedin-swipe
+EnvironmentFile=/opt/linkedin-swipe/.env
+ExecStart=/opt/linkedin-swipe/venv/bin/uvicorn app:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
