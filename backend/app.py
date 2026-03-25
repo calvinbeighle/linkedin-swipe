@@ -357,6 +357,9 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 .btn-nope svg{width:26px;height:26px;stroke:#fe3c72;fill:none;stroke-width:3;stroke-linecap:round}
 .btn-info{width:46px;height:46px;border-color:#21a0ff}
 .btn-info svg{width:20px;height:20px;fill:#21a0ff}
+.btn-undo{width:46px;height:46px;border-color:#f5a623}
+.btn-undo svg{width:20px;height:20px;fill:none;stroke:#f5a623;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
+.btn-undo.disabled{opacity:0.2;pointer-events:none}
 .btn-like{border-color:#2DF88A}
 .btn-like svg{width:28px;height:28px;fill:#2DF88A}
 .empty{display:none;flex:1;flex-direction:column;align-items:center;justify-content:center;padding:40px;text-align:center}
@@ -373,6 +376,7 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 </div>
 <div class="stack" id="stack"></div>
 <div class="actions" id="actions">
+  <div class="action-btn btn-undo disabled" id="btnUndo"><svg viewBox="0 0 24 24"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg></div>
   <div class="action-btn btn-nope" id="btnNope"><svg viewBox="0 0 24 24"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg></div>
   <div class="action-btn btn-info" id="btnInfo"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="#21a0ff" stroke-width="2"/><line x1="12" y1="16" x2="12" y2="12" stroke="#21a0ff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="8" r="1"/></svg></div>
   <div class="action-btn btn-like" id="btnLike"><svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 0 0 0-7.78z"/></svg></div>
@@ -382,7 +386,7 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 
 <script>
 const API_KEY='__API_KEY__',BASE=window.location.origin,K='?key='+API_KEY;
-let profiles=[],idx=0,busy=false,dragCard=null,startX=0,startY=0,currentX=0;
+let profiles=[],idx=0,busy=false,dragCard=null,startX=0,startY=0,currentX=0,lastSwipedIdx=-1;
 
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
 function initials(n){return n.split(' ').map(w=>w[0]).filter(Boolean).slice(0,2).join('').toUpperCase()}
@@ -412,6 +416,7 @@ function renderCards(){
     stack.appendChild(createCard(profiles[i],i===idx));
   }
   document.getElementById('counter').textContent=(idx+1)+' / '+profiles.length;
+  document.getElementById('btnUndo').classList.toggle('disabled',lastSwipedIdx<0);
   setupDrag();
 }
 
@@ -571,6 +576,10 @@ async function adjustEmail(){
 }
 
 function dismissEmail(send){
+  if(send&&!inSendWindow()){
+    alert('Emails can only be sent between 8:00 AM and 7:30 PM PST.');
+    return;
+  }
   document.getElementById('emailOverlay').classList.remove('visible');
   doSwipe('right');
   setTimeout(()=>renderCards(),300);
@@ -587,8 +596,34 @@ async function doSwipe(direction){
       body:JSON.stringify({tab:p._tab,row:p._row,direction:direction==='right'?'right':'left'})
     });
   }catch(e){}
+  lastSwipedIdx=idx;
   idx++;busy=false;
 }
+
+function inSendWindow(){
+  const now=new Date();
+  const pst=new Date(now.toLocaleString('en-US',{timeZone:'America/Los_Angeles'}));
+  const h=pst.getHours(),m=pst.getMinutes();
+  return h>=8&&(h<19||(h===19&&m<=30));
+}
+
+// Undo: go back one card and clear the Reviewed value in the sheet
+document.getElementById('btnUndo').addEventListener('click',async ()=>{
+  if(lastSwipedIdx<0||busy) return;
+  busy=true;
+  const p=profiles[lastSwipedIdx];
+  try{
+    await fetch(BASE+'/undo',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+API_KEY},
+      body:JSON.stringify({tab:p._tab,row:p._row})
+    });
+  }catch(e){}
+  idx=lastSwipedIdx;
+  lastSwipedIdx=-1;
+  busy=false;
+  renderCards();
+});
 
 // Button triggers
 document.getElementById('btnNope').addEventListener('click',()=>{
@@ -611,6 +646,7 @@ document.addEventListener('keydown',e=>{
   if(e.key==='ArrowLeft')document.getElementById('btnNope').click();
   if(e.key==='ArrowRight')document.getElementById('btnLike').click();
   if(e.key==='ArrowUp'||e.key==='ArrowDown')document.getElementById('btnInfo').click();
+  if(e.key==='z'&&(e.metaKey||e.ctrlKey))document.getElementById('btnUndo').click();
 });
 
 loadProfiles();
@@ -668,6 +704,29 @@ def record_swipe(
         raise HTTPException(status_code=500, detail="Failed to update sheet")
 
     return {"status": "ok", "tab": tab, "row": row, "direction": swipe.direction}
+
+
+class UndoRequest(BaseModel):
+    tab: str
+    row: int
+
+
+@app.post("/undo")
+def undo_swipe(
+    req: UndoRequest,
+    _auth: None = Depends(verify_api_key),
+):
+    """Clear the Reviewed column for a profile (undo last swipe)."""
+    headers = _cache["headers_by_tab"].get(req.tab)
+    if not headers:
+        raise HTTPException(status_code=400, detail=f"Unknown tab: {req.tab}")
+    reviewed_col = _col_letter(headers, "Reviewed")
+    if not reviewed_col:
+        raise HTTPException(status_code=500, detail="No Reviewed column found")
+    ok = _gws_update(req.tab, f"{reviewed_col}{req.row}", [[""]])
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to update sheet")
+    return {"status": "ok", "tab": req.tab, "row": req.row}
 
 
 @app.get("/stats")
