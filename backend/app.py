@@ -144,6 +144,7 @@ FIELD_MAP = {
     "recommended_approach": ["Recommended Approach"],
     "score_breakdown": ["Score Breakdown"],
     "outreach_status": ["Outreach Status", "LinkedIn Status"],
+    "reviewed": ["Reviewed"],
 }
 
 
@@ -625,9 +626,11 @@ def get_pending_profiles(
     limit: int = 200,
     _auth: None = Depends(verify_api_key),
 ):
-    """Return profiles that haven't been swiped yet (no Outreach Status)."""
+    """Return profiles that haven't been reviewed or reached out to."""
     _refresh_cache()
-    pending = [p for p in _cache["profiles"] if not p["outreach_status"]]
+    pending = [
+        p for p in _cache["profiles"] if not p["reviewed"] and not p["outreach_status"]
+    ]
     # Sort by ICP score descending (nulls last)
     pending.sort(
         key=lambda p: (p["icp_score"] is not None, p["icp_score"] or 0), reverse=True
@@ -646,22 +649,20 @@ def record_swipe(
     swipe: SwipeRequest,
     _auth: None = Depends(verify_api_key),
 ):
-    """Write swipe result to the Outreach Status column in the sheet."""
+    """Write swipe result to the Reviewed column in the sheet."""
     tab = swipe.tab
     row = swipe.row
     headers = _cache["headers_by_tab"].get(tab)
     if not headers:
         raise HTTPException(status_code=400, detail=f"Unknown tab: {tab}")
 
-    # Find the outreach status column dynamically
-    status_col = _col_letter(headers, "Outreach Status") or _col_letter(
-        headers, "LinkedIn Status"
-    )
-    if not status_col:
-        raise HTTPException(status_code=500, detail="No status column found in sheet")
+    # Find the Reviewed column dynamically
+    reviewed_col = _col_letter(headers, "Reviewed")
+    if not reviewed_col:
+        raise HTTPException(status_code=500, detail="No Reviewed column found in sheet")
 
     status_value = "Liked" if swipe.direction == "right" else "Skipped"
-    ok = _gws_update(tab, f"{status_col}{row}", [[status_value]])
+    ok = _gws_update(tab, f"{reviewed_col}{row}", [[status_value]])
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to update sheet")
 
@@ -673,16 +674,19 @@ def get_stats(_auth: None = Depends(verify_api_key)):
     if not _cache["profiles"]:
         _refresh_cache()
     total = len(_cache["profiles"])
-    pending = sum(1 for p in _cache["profiles"] if not p["outreach_status"])
-    liked = sum(
-        1
-        for p in _cache["profiles"]
-        if p["outreach_status"].lower() in ("liked", "connected")
+    pending = sum(
+        1 for p in _cache["profiles"] if not p["reviewed"] and not p["outreach_status"]
     )
-    skipped = sum(
-        1 for p in _cache["profiles"] if p["outreach_status"].lower() == "skipped"
-    )
-    return {"total": total, "pending": pending, "liked": liked, "skipped": skipped}
+    liked = sum(1 for p in _cache["profiles"] if p["reviewed"].lower() == "liked")
+    skipped = sum(1 for p in _cache["profiles"] if p["reviewed"].lower() == "skipped")
+    reached_out = sum(1 for p in _cache["profiles"] if p["outreach_status"])
+    return {
+        "total": total,
+        "pending": pending,
+        "liked": liked,
+        "skipped": skipped,
+        "reached_out": reached_out,
+    }
 
 
 class EmailAdjustRequest(BaseModel):
