@@ -177,353 +177,356 @@ WEB_APP_HTML = r"""<!DOCTYPE html>
 <meta name="apple-mobile-web-app-title" content="Swipe">
 <meta name="robots" content="noindex, nofollow">
 <title>Lead Swipe</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Crimson+Text:wght@400;600&family=Playfair+Display:ital@1&display=swap" rel="stylesheet">
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html, body { height: 100%; }
-body {
-  font-family: 'Crimson Text', serif;
-  background: #e8e8e8;
-  color: rgba(0,0,0,0.7);
-  display: flex; flex-direction: column;
-  padding-top: env(safe-area-inset-top, 20px);
-  padding-bottom: env(safe-area-inset-bottom, 20px);
-}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none}
+html,body{height:100%;overflow:hidden}
+body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;color:#fff;display:flex;flex-direction:column}
 
-.header {
-  background: #fff; padding: 14px 20px 12px;
-  border-bottom: 1px solid rgba(0,0,0,0.08);
-  display: flex; justify-content: space-between; align-items: baseline;
-  flex-shrink: 0;
-}
-.header h1 {
-  font-family: 'Playfair Display', serif;
-  font-weight: 400; font-style: italic;
-  font-size: 20px; color: rgba(0,0,0,0.85);
-}
-.header .counter { font-size: 13px; color: rgba(0,0,0,0.35); }
+/* ── Top bar ── */
+.topbar{height:52px;display:flex;align-items:center;justify-content:center;flex-shrink:0;position:relative;z-index:10}
+.topbar .logo{font-size:24px;font-weight:800;background:linear-gradient(135deg,#fd267a,#ff6036);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.topbar .counter{position:absolute;right:16px;font-size:12px;color:rgba(255,255,255,0.35);font-weight:600}
 
-.card-area {
-  flex: 1; display: flex; align-items: flex-start; justify-content: center;
-  padding: 16px; overflow-y: auto; -webkit-overflow-scrolling: touch;
-}
+/* ── Card stack ── */
+.stack{flex:1;position:relative;display:flex;align-items:center;justify-content:center;padding:8px;overflow:hidden}
+.card{position:absolute;width:calc(100% - 16px);max-width:420px;height:calc(100% - 8px);border-radius:12px;overflow-y:auto;overflow-x:hidden;background:#222;box-shadow:0 4px 24px rgba(0,0,0,0.5);transform-origin:50% 80%;will-change:transform;cursor:grab;touch-action:pan-y;-webkit-overflow-scrolling:touch;scroll-snap-type:y proximity}
+.card:active{cursor:grabbing}
+.card.behind{transform:scale(0.95) translateY(8px);filter:brightness(0.7);pointer-events:none;z-index:0;overflow:hidden}
+.card.top{z-index:2}
+.card.exit-left{transition:transform 0.4s ease-out,opacity 0.4s;transform:translateX(-150%) rotate(-20deg)!important;opacity:0;pointer-events:none}
+.card.exit-right{transition:transform 0.4s ease-out,opacity 0.4s;transform:translateX(150%) rotate(20deg)!important;opacity:0;pointer-events:none}
 
-.card {
-  background: #fff; width: 100%; max-width: 440px;
-  border-radius: 3px; padding: 32px 24px 24px;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-  animation: fadeIn 0.2s ease-out;
-}
-@keyframes fadeIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+/* Photo section -- takes full card height as first "page" */
+.card-hero{position:relative;width:100%;height:100%;flex-shrink:0;scroll-snap-align:start}
+.card-photo{position:absolute;inset:0;background-size:cover;background-position:center top;background-color:#2a2a2a}
+.card-photo .initials{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:72px;font-weight:800;color:rgba(255,255,255,0.15)}
 
-.card-top {
-  display: flex; align-items: flex-start; gap: 16px; margin-bottom: 20px;
-}
-.card .avatar {
-  width: 72px; height: 72px; border-radius: 50%; flex-shrink: 0;
-  background: rgba(0,0,0,0.06); color: rgba(0,0,0,0.35);
-  font-family: 'Playfair Display', serif; font-style: italic;
-  font-size: 22px;
-  overflow: hidden; display: flex; align-items: center; justify-content: center;
-}
-.card .avatar img {
-  width: 100%; height: 100%; object-fit: cover; border-radius: 50%;
-}
-.card-top-info { flex: 1; min-width: 0; }
+/* Gradient overlay */
+.card-gradient{position:absolute;bottom:0;left:0;right:0;height:55%;background:linear-gradient(to top,rgba(0,0,0,0.85) 0%,rgba(0,0,0,0.5) 40%,transparent 100%);pointer-events:none}
 
-.card .name {
-  font-size: 22px; font-weight: 600; color: rgba(0,0,0,0.85);
-  letter-spacing: 0.2px; line-height: 1.2;
-}
-.card .headline {
-  font-size: 14px; color: rgba(0,0,0,0.55); margin-top: 4px;
-  line-height: 1.3;
-}
-.card .meta-row {
-  display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px;
-  font-size: 13px; color: rgba(0,0,0,0.4);
-}
-.card .meta-row span { white-space: nowrap; }
+/* NOPE / LIKE stamps */
+.stamp{position:absolute;top:60px;padding:8px 16px;border:4px solid;border-radius:8px;font-size:36px;font-weight:800;letter-spacing:3px;opacity:0;transform:scale(0.8);pointer-events:none;z-index:5}
+.stamp-nope{left:20px;border-color:#fe3c72;color:#fe3c72;transform:rotate(-15deg) scale(0.8)}
+.stamp-like{right:20px;border-color:#2DF88A;color:#2DF88A;transform:rotate(15deg) scale(0.8)}
 
-.icp-badge {
-  display: inline-block; padding: 2px 10px; border-radius: 2px;
-  font-size: 13px; font-weight: 600; letter-spacing: 0.5px;
-  margin-top: 6px;
-}
-.icp-high { background: rgba(0,120,0,0.1); color: rgba(0,120,0,0.8); }
-.icp-mid { background: rgba(180,130,0,0.1); color: rgba(180,130,0,0.8); }
-.icp-low { background: rgba(180,0,0,0.1); color: rgba(180,0,0,0.8); }
+/* Card info overlay on photo */
+.card-info{position:absolute;bottom:0;left:0;right:0;padding:20px 20px 24px;z-index:3}
+.card-name{font-size:28px;font-weight:700;line-height:1.1;text-shadow:0 2px 8px rgba(0,0,0,0.5)}
+.card-name .icp{font-size:16px;font-weight:600;margin-left:8px;padding:2px 8px;border-radius:20px;vertical-align:middle}
+.icp-high{background:rgba(45,248,138,0.25);color:#2DF88A}
+.icp-mid{background:rgba(255,200,0,0.25);color:#ffc800}
+.icp-low{background:rgba(254,60,114,0.2);color:#fe3c72}
+.card-title{font-size:15px;color:rgba(255,255,255,0.85);margin-top:4px;font-weight:400}
+.card-company{font-size:14px;color:rgba(255,255,255,0.6);margin-top:2px;font-weight:600}
+.card-meta{font-size:13px;color:rgba(255,255,255,0.45);margin-top:4px}
+.scroll-hint{text-align:center;margin-top:10px;font-size:11px;color:rgba(255,255,255,0.3);letter-spacing:1px}
 
-.sep { width: 40px; height: 1px; background: rgba(0,0,0,0.1); margin: 16px 0; }
+/* Below-photo detail area (scroll down to see) */
+.card-below{padding:24px 20px 40px;background:#1a1a1a}
+.detail-section{margin-bottom:20px}
+.detail-label{font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,255,255,0.4);margin-bottom:6px}
+.detail-text{font-size:14px;color:rgba(255,255,255,0.8);line-height:1.5}
+.detail-links{display:flex;gap:10px;margin-top:8px}
+.detail-links a{flex:1;display:block;padding:10px;text-align:center;text-decoration:none;font-size:13px;font-weight:700;border-radius:20px;transition:opacity 0.15s}
+.detail-links a:active{opacity:0.6}
+.link-li{background:rgba(255,255,255,0.15);color:#fff}
+.link-job{background:rgba(45,248,138,0.15);color:#2DF88A}
 
-.section-label {
-  font-size: 11px; font-weight: 600; letter-spacing: 1.5px;
-  text-transform: uppercase; color: rgba(0,0,0,0.3); margin-bottom: 6px;
-}
-.section-text {
-  font-size: 15px; color: rgba(0,0,0,0.65); line-height: 1.5;
-  margin-bottom: 16px;
-}
-.section-text:last-child { margin-bottom: 0; }
+/* ── Email draft modal ── */
+.email-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:100;align-items:center;justify-content:center;padding:16px}
+.email-overlay.visible{display:flex}
+.email-card{background:#1a1a1a;border-radius:16px;width:100%;max-width:420px;max-height:80vh;overflow-y:auto;padding:28px 24px}
+.email-card h3{font-size:18px;font-weight:700;color:#2DF88A;margin-bottom:4px}
+.email-card .email-to{font-size:13px;color:rgba(255,255,255,0.5);margin-bottom:16px}
+.email-card .email-subject{font-size:15px;font-weight:600;color:rgba(255,255,255,0.85);margin-bottom:12px}
+.email-card .email-body{font-size:14px;color:rgba(255,255,255,0.75);line-height:1.6;white-space:pre-wrap}
+.email-actions{display:flex;gap:12px;margin-top:24px}
+.email-actions button{flex:1;padding:14px;border:none;border-radius:24px;font-size:15px;font-weight:700;cursor:pointer}
+.email-send{background:linear-gradient(135deg,#2DF88A,#21d07a);color:#000}
+.email-skip{background:rgba(255,255,255,0.1);color:rgba(255,255,255,0.7)}
 
-.insight-block {
-  border-left: 2px solid rgba(0,0,0,0.1);
-  background: rgba(0,0,0,0.02); padding: 10px 14px;
-  margin-bottom: 16px;
-}
-.insight-block .section-text {
-  font-family: 'Playfair Display', serif; font-style: italic;
-  font-size: 14px; color: rgba(0,0,0,0.55); margin-bottom: 0;
-}
+/* ── Action buttons ── */
+.actions{height:90px;display:flex;align-items:center;justify-content:center;gap:24px;flex-shrink:0;z-index:10}
+.action-btn{width:60px;height:60px;border-radius:50%;border:2px solid;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s;background:transparent}
+.action-btn:active{transform:scale(0.9)}
+.action-btn:hover{transform:scale(1.08);box-shadow:0 0 20px rgba(255,255,255,0.1)}
+.btn-nope{border-color:#fe3c72}
+.btn-nope svg{width:26px;height:26px;stroke:#fe3c72;fill:none;stroke-width:3;stroke-linecap:round}
+.btn-info{width:46px;height:46px;border-color:#21a0ff}
+.btn-info svg{width:20px;height:20px;fill:#21a0ff}
+.btn-like{border-color:#2DF88A}
+.btn-like svg{width:28px;height:28px;fill:#2DF88A}
 
-.card-links {
-  display: flex; gap: 10px; margin-top: 20px;
-}
-.card-links a {
-  flex: 1; display: block; padding: 12px 16px;
-  text-decoration: none; text-align: center;
-  font-family: 'Crimson Text', serif; font-size: 14px; font-weight: 600;
-  letter-spacing: 0.5px; border-radius: 2px;
-  transition: opacity 0.15s;
-}
-.card-links a:active { opacity: 0.6; }
-.link-linkedin { background: rgba(0,0,0,0.85); color: rgba(255,255,255,0.95); }
-.link-signal { background: rgba(0,0,0,0.06); color: rgba(0,0,0,0.6); }
-
-.actions {
-  background: #fff; padding: 12px 20px 8px;
-  border-top: 1px solid rgba(0,0,0,0.08);
-  display: flex; gap: 14px; flex-shrink: 0;
-}
-.btn {
-  flex: 1; padding: 16px 0; border: none; border-radius: 2px;
-  font-family: 'Crimson Text', serif;
-  font-size: 16px; font-weight: 600; letter-spacing: 1.5px;
-  cursor: pointer; transition: opacity 0.15s;
-}
-.btn:active { opacity: 0.6; }
-.btn-skip { background: rgba(0,0,0,0.05); color: rgba(0,0,0,0.45); }
-.btn-connect { background: rgba(0,120,0,0.8); color: rgba(255,255,255,0.95); }
-.btn:disabled { opacity: 0.3; }
-
-.empty {
-  display: none; flex: 1;
-  flex-direction: column; justify-content: center; align-items: center;
-  padding: 40px; text-align: center;
-}
-.empty.visible { display: flex; }
-.empty h2 {
-  font-family: 'Playfair Display', serif;
-  font-weight: 400; font-style: italic;
-  font-size: 24px; color: rgba(0,0,0,0.7);
-}
-.empty p { font-size: 15px; color: rgba(0,0,0,0.4); margin-top: 8px; }
-.empty .refresh-btn {
-  margin-top: 24px; padding: 12px 32px;
-  background: rgba(0,0,0,0.85); color: rgba(255,255,255,0.95);
-  border: none; border-radius: 2px; font-family: 'Crimson Text', serif;
-  font-size: 15px; font-weight: 600; cursor: pointer;
-}
-
-.kbd-hint {
-  text-align: center; font-size: 12px; color: rgba(0,0,0,0.25);
-  padding: 4px 0 0; background: #fff;
-}
+/* ── Empty state ── */
+.empty{display:none;flex:1;flex-direction:column;align-items:center;justify-content:center;padding:40px;text-align:center}
+.empty.visible{display:flex}
+.empty h2{font-size:24px;font-weight:700;color:rgba(255,255,255,0.7)}
+.empty p{font-size:15px;color:rgba(255,255,255,0.35);margin-top:8px}
+.empty button{margin-top:24px;padding:12px 32px;background:linear-gradient(135deg,#fd267a,#ff6036);color:#fff;border:none;border-radius:24px;font-size:15px;font-weight:700;cursor:pointer}
 </style>
 </head>
 <body>
 
-<div class="header">
-  <h1>Lead Swipe</h1>
-  <span class="counter" id="counter">--</span>
+<div class="topbar">
+  <div class="logo">lead swipe</div>
+  <div class="counter" id="counter"></div>
 </div>
 
-<div class="card-area" id="cardArea">
-  <div class="card" id="card">
-    <div class="card-top">
-      <div class="avatar" id="avatar">--</div>
-      <div class="card-top-info">
-        <div class="name" id="profileName">Loading...</div>
-        <div class="headline" id="profileHeadline"></div>
-        <div class="meta-row" id="profileMeta"></div>
-        <div id="icpBadge"></div>
-      </div>
-    </div>
-    <div id="enrichmentArea"></div>
-    <div class="card-links" id="cardLinks">
-      <a class="link-linkedin" id="viewLink" href="#" target="_blank" rel="noopener">LinkedIn Profile</a>
-    </div>
+<div class="stack" id="stack"></div>
+
+<div class="actions" id="actions">
+  <div class="action-btn btn-nope" id="btnNope">
+    <svg viewBox="0 0 24 24"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg>
+  </div>
+  <div class="action-btn btn-info" id="btnInfo">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="#21a0ff" stroke-width="2"/><line x1="12" y1="16" x2="12" y2="12" stroke="#21a0ff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="8" r="1"/></svg>
+  </div>
+  <div class="action-btn btn-like" id="btnLike">
+    <svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 0 0 0-7.78z"/></svg>
   </div>
 </div>
 
-<div class="actions" id="actions">
-  <button class="btn btn-skip" id="btnSkip" onclick="doSwipe('left')">SKIP</button>
-  <button class="btn btn-connect" id="btnConnect" onclick="doSwipe('right')">CONNECT</button>
+<div class="email-overlay" id="emailOverlay">
+  <div class="email-card" id="emailCard"></div>
 </div>
-<div class="kbd-hint" id="kbdHint"></div>
 
 <div class="empty" id="emptyState">
-  <h2>All caught up</h2>
-  <p>No pending leads to review</p>
-  <button class="refresh-btn" onclick="loadProfiles()">Refresh</button>
+  <h2>No more leads</h2>
+  <p>You've reviewed everyone</p>
+  <button onclick="loadProfiles()">Refresh</button>
 </div>
 
 <script>
-const API_KEY = '__API_KEY__';
-const BASE = window.location.origin;
-const K = '?key=' + API_KEY;
+const API_KEY='__API_KEY__',BASE=window.location.origin,K='?key='+API_KEY;
+let profiles=[],idx=0,busy=false,dragCard=null,startX=0,startY=0,currentX=0,detailOpen=false;
 
-let profiles = [];
-let idx = 0;
-let busy = false;
+function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+function initials(n){return n.split(' ').map(w=>w[0]).filter(Boolean).slice(0,2).join('').toUpperCase()}
+function icpCls(s){return s>=75?'icp-high':s>=50?'icp-mid':'icp-low'}
 
-function esc(s) {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
-
-function getInitials(name) {
-  return name.split(' ').map(w => w[0]).filter(Boolean).slice(0,2).join('').toUpperCase();
-}
-
-function icpClass(score) {
-  if (score >= 75) return 'icp-high';
-  if (score >= 50) return 'icp-mid';
-  return 'icp-low';
-}
-
-async function loadProfiles() {
+async function loadProfiles(){
   document.getElementById('emptyState').classList.remove('visible');
-  document.getElementById('cardArea').style.display = 'flex';
-  document.getElementById('actions').style.display = 'flex';
-  document.getElementById('kbdHint').style.display = '';
-  document.getElementById('profileName').textContent = 'Loading...';
-  document.getElementById('profileHeadline').textContent = '';
-  document.getElementById('enrichmentArea').innerHTML = '';
-  try {
-    const r = await fetch(BASE + '/profiles' + K + '&limit=200');
-    profiles = await r.json();
-    idx = 0;
-    showCurrent();
-  } catch(e) {
-    document.getElementById('profileName').textContent = 'Error: ' + e.message;
-  }
+  document.getElementById('stack').style.display='';
+  document.getElementById('actions').style.display='';
+  try{
+    const r=await fetch(BASE+'/profiles'+K+'&limit=200');
+    profiles=await r.json();idx=0;renderCards();
+  }catch(e){console.error(e)}
 }
 
-function showCurrent() {
-  if (idx >= profiles.length) {
-    document.getElementById('cardArea').style.display = 'none';
-    document.getElementById('actions').style.display = 'none';
-    document.getElementById('kbdHint').style.display = 'none';
+function renderCards(){
+  const stack=document.getElementById('stack');
+  stack.innerHTML='';
+  if(idx>=profiles.length){
+    stack.style.display='none';
+    document.getElementById('actions').style.display='none';
     document.getElementById('emptyState').classList.add('visible');
+    document.getElementById('counter').textContent='';
     return;
   }
-  const p = profiles[idx];
-
-  document.getElementById('profileName').textContent = p.name || 'Profile';
-  document.getElementById('profileHeadline').textContent = p.headline || '';
-
-  // Meta row: company, location, employees
-  let meta = [];
-  if (p.company) meta.push(esc(p.company));
-  if (p.location) meta.push(esc(p.location));
-  if (p.employee_count) meta.push(esc(p.employee_count) + ' employees');
-  document.getElementById('profileMeta').innerHTML = meta.map(m => '<span>' + m + '</span>').join('');
-
-  // ICP badge
-  const badge = document.getElementById('icpBadge');
-  if (p.icp_score != null) {
-    badge.innerHTML = '<span class="icp-badge ' + icpClass(p.icp_score) + '">ICP ' + p.icp_score + '</span>';
-  } else {
-    badge.innerHTML = '';
+  // Render up to 2 cards (current + next behind)
+  for(let i=Math.min(idx+1,profiles.length-1);i>=idx;i--){
+    stack.appendChild(createCard(profiles[i],i===idx));
   }
-
-  // Avatar
-  const av = document.getElementById('avatar');
-  const initials = getInitials(p.name || '?');
-  if (p.photo_url) {
-    av.innerHTML = '<img src="' + esc(p.photo_url) + '" onerror="this.parentNode.textContent=\'' + initials + '\'">';
-  } else if (p.company) {
-    const domain = p.company.toLowerCase().replace(/[^a-z0-9]/g,'') + '.com';
-    av.innerHTML = '<img src="https://logo.clearbit.com/' + domain + '?size=192" onerror="this.parentNode.textContent=\'' + initials + '\'" style="border-radius:0;padding:12px;">';
-  } else {
-    av.innerHTML = ''; av.textContent = initials;
-  }
-
-  // Enrichment sections
-  let html = '';
-
-  if (p.company_summary) {
-    html += '<div class="sep"></div>';
-    html += '<div class="section-label">Company</div>';
-    html += '<div class="section-text">' + esc(p.company_summary) + '</div>';
-  }
-
-  if (p.ai_signal) {
-    html += '<div class="sep"></div>';
-    html += '<div class="section-label">AI Signal</div>';
-    html += '<div class="section-text">' + esc(p.ai_signal) + '</div>';
-    if (p.ai_signal_analysis) {
-      html += '<div class="insight-block"><div class="section-text">' + esc(p.ai_signal_analysis) + '</div></div>';
-    }
-  }
-
-  if (p.why_trace_fits) {
-    html += '<div class="sep"></div>';
-    html += '<div class="section-label">Why Trace Fits</div>';
-    html += '<div class="section-text">' + esc(p.why_trace_fits) + '</div>';
-  }
-
-  if (p.recommended_approach) {
-    html += '<div class="sep"></div>';
-    html += '<div class="section-label">Recommended Approach</div>';
-    html += '<div class="section-text">' + esc(p.recommended_approach) + '</div>';
-  }
-
-  document.getElementById('enrichmentArea').innerHTML = html;
-
-  // Links
-  let links = '<a class="link-linkedin" href="' + esc(p.linkedin_url) + '" target="_blank" rel="noopener">LinkedIn Profile</a>';
-  if (p.job_search_url) {
-    links += '<a class="link-signal" href="' + esc(p.job_search_url) + '" target="_blank" rel="noopener">AI Job Posting</a>';
-  }
-  document.getElementById('cardLinks').innerHTML = links;
-
-  document.getElementById('counter').textContent = (idx + 1) + ' / ' + profiles.length;
-  document.getElementById('card').style.animation = 'none';
-  void document.getElementById('card').offsetHeight;
-  document.getElementById('card').style.animation = 'fadeIn 0.2s ease-out';
-  document.getElementById('cardArea').scrollTop = 0;
+  document.getElementById('counter').textContent=(idx+1)+' / '+profiles.length;
+  setupDrag();
 }
 
-async function doSwipe(direction) {
-  if (busy || idx >= profiles.length) return;
-  busy = true;
-  document.querySelectorAll('.btn').forEach(b => b.disabled = true);
-  try {
-    await fetch(BASE + '/swipe', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + API_KEY },
-      body: JSON.stringify({ profile_id: profiles[idx].id, direction })
+function createCard(p,isTop){
+  const card=document.createElement('div');
+  card.className='card '+(isTop?'top':'behind');
+  card.dataset.id=p.id;
+
+  let photoStyle='';
+  if(p.photo_url){
+    photoStyle='background-image:url('+p.photo_url.replace(/'/g,'%27')+')';
+  }else if(p.company){
+    const d=p.company.toLowerCase().replace(/[^a-z0-9]/g,'')+ '.com';
+    photoStyle='background-image:url(https://logo.clearbit.com/'+d+'?size=400);background-size:40%;background-repeat:no-repeat;background-position:center 30%';
+  }
+
+  let meta=[];
+  if(p.location) meta.push(esc(p.location));
+  if(p.employee_count) meta.push(esc(p.employee_count)+' employees');
+
+  let icpHtml='';
+  if(p.icp_score!=null&&p.icp_score<=100) icpHtml='<span class="icp '+icpCls(p.icp_score)+'">'+p.icp_score+'</span>';
+
+  // Below-photo detail sections
+  let below='';
+  if(p.company_summary) below+='<div class="detail-section"><div class="detail-label">Company</div><div class="detail-text">'+esc(p.company_summary)+'</div></div>';
+  if(p.ai_signal){
+    let txt=esc(p.ai_signal);
+    if(p.ai_signal_analysis) txt+='<br><span style="color:rgba(255,255,255,0.55);font-size:13px">'+esc(p.ai_signal_analysis)+'</span>';
+    below+='<div class="detail-section"><div class="detail-label">AI Signal</div><div class="detail-text">'+txt+'</div></div>';
+  }
+  if(p.why_trace_fits) below+='<div class="detail-section"><div class="detail-label">Why Trace Fits</div><div class="detail-text">'+esc(p.why_trace_fits)+'</div></div>';
+  if(p.recommended_approach) below+='<div class="detail-section"><div class="detail-label">Approach</div><div class="detail-text">'+esc(p.recommended_approach)+'</div></div>';
+  below+='<div class="detail-links"><a class="link-li" href="'+esc(p.linkedin_url)+'" target="_blank">LinkedIn</a>';
+  if(p.job_search_url) below+='<a class="link-job" href="'+esc(p.job_search_url)+'" target="_blank">AI Job Posting</a>';
+  below+='</div>';
+
+  card.innerHTML=
+    '<div class="card-hero">'+
+      '<div class="card-photo" style="'+photoStyle+'">'+(p.photo_url?'':'<div class="initials">'+initials(p.name||'?')+'</div>')+'</div>'+
+      '<div class="card-gradient"></div>'+
+      '<div class="stamp stamp-nope">NOPE</div>'+
+      '<div class="stamp stamp-like">LIKE</div>'+
+      '<div class="card-info">'+
+        '<div class="card-name">'+esc(p.name||'Profile')+' '+icpHtml+'</div>'+
+        (p.headline?'<div class="card-title">'+esc(p.headline)+'</div>':'')+
+        (p.company?'<div class="card-company">'+esc(p.company)+'</div>':'')+
+        (meta.length?'<div class="card-meta">'+meta.join(' / ')+'</div>':'')+
+        (below?'<div class="scroll-hint">SCROLL DOWN FOR MORE</div>':'')+
+      '</div>'+
+    '</div>'+
+    (below?'<div class="card-below">'+below+'</div>':'');
+
+  return card;
+}
+
+// ── Drag / swipe ──
+function setupDrag(){
+  const card=document.querySelector('.card.top');
+  if(!card) return;
+  dragCard=card;
+  card.addEventListener('pointerdown',onStart,{passive:false});
+}
+
+let dragging=false;
+function onStart(e){
+  if(e.target.closest('.detail-links,.card-below a')) return;
+  startX=e.clientX;startY=e.clientY;currentX=0;dragging=false;
+  document.addEventListener('pointermove',onMove);
+  document.addEventListener('pointerup',onEnd);
+}
+
+function onMove(e){
+  const dx=e.clientX-startX,dy=e.clientY-startY;
+  // Only start horizontal drag if at scroll top and mostly horizontal movement
+  if(!dragging){
+    if(Math.abs(dx)>10&&Math.abs(dx)>Math.abs(dy)&&dragCard.scrollTop<10){
+      dragging=true;dragCard.setPointerCapture(e.pointerId);dragCard.style.transition='none';dragCard.style.overflow='hidden';
+    }else return;
+  }
+  currentX=dx;
+  const rotate=currentX*0.08;
+  dragCard.style.transform='translateX('+currentX+'px) rotate('+rotate+'deg)';
+  const nope=dragCard.querySelector('.stamp-nope');
+  const like=dragCard.querySelector('.stamp-like');
+  const t=Math.min(Math.abs(currentX)/120,1);
+  if(currentX<-20){nope.style.opacity=t;nope.style.transform='rotate(-15deg) scale('+(0.8+t*0.2)+')';like.style.opacity=0}
+  else if(currentX>20){like.style.opacity=t;like.style.transform='rotate(15deg) scale('+(0.8+t*0.2)+')';nope.style.opacity=0}
+  else{nope.style.opacity=0;like.style.opacity=0}
+}
+
+function onEnd(){
+  document.removeEventListener('pointermove',onMove);
+  document.removeEventListener('pointerup',onEnd);
+  if(!dragging) return;
+  dragCard.style.overflow='';
+  if(Math.abs(currentX)>100){
+    animateOut(currentX>0?'right':'left');
+  }else{
+    dragCard.style.transition='transform 0.3s ease-out';
+    dragCard.style.transform='';
+    dragCard.querySelector('.stamp-nope').style.opacity=0;
+    dragCard.querySelector('.stamp-like').style.opacity=0;
+  }
+  dragging=false;
+}
+
+function animateOut(dir){
+  const card=dragCard;
+  card.classList.add(dir==='left'?'exit-left':'exit-right');
+  if(dir==='left'){
+    doSwipe('left');
+    setTimeout(()=>renderCards(),400);
+  }else{
+    // Right swipe: show email draft
+    showEmailDraft(profiles[idx]);
+  }
+}
+
+// Email draft templates (rotate for same-company variety)
+const EMAIL_TEMPLATES=[
+  (n,job,co)=>'Hi '+n+',\n\nI graduated from Harvard and have been deeply involved in AI since December \'22. I came across the '+job+' role on LinkedIn and would love to ask a few questions about the position and learn more about what '+co+' has planned on the AI front.\n\nHave a great day!\n\nBest,\nCalvin',
+  (n,job,co)=>'Hi '+n+',\n\nI\'m a recent Harvard grad and have been working in the AI space since December \'22. I came across the '+job+' role on LinkedIn and would love to learn more about the position and what '+co+' has planned on the AI front.\n\nHave a great day!\n\nBest,\nCalvin',
+  (n,job,co)=>'Hi '+n+',\n\nI graduated from Harvard and have been deeply involved in AI since December \'22. I came across the '+job+' role on LinkedIn and would love to ask a few questions about the position and learn more about what '+co+' has planned on the agents front.\n\nHave a great day!\n\nBest,\nCalvin',
+];
+let templateIdx=0;
+
+function showEmailDraft(p){
+  const firstName=(p.name||'').split(' ')[0];
+  const job=p.ai_signal||'AI';
+  const co=p.company||'your company';
+  const body=EMAIL_TEMPLATES[templateIdx%EMAIL_TEMPLATES.length](firstName,job,co);
+  templateIdx++;
+  const subject=p.ai_signal||'AI Role';
+
+  document.getElementById('emailCard').innerHTML=
+    '<h3>Draft Email</h3>'+
+    '<div class="email-to">To: '+esc(firstName)+' (enrich via Apollo for email)</div>'+
+    '<div class="email-subject">Subject: '+esc(subject)+'</div>'+
+    '<div class="email-body">'+esc(body)+'</div>'+
+    '<div class="email-actions">'+
+      '<button class="email-skip" onclick="dismissEmail(false)">Skip Email</button>'+
+      '<button class="email-send" onclick="dismissEmail(true)">Send</button>'+
+    '</div>';
+  document.getElementById('emailOverlay').classList.add('visible');
+}
+
+function dismissEmail(send){
+  document.getElementById('emailOverlay').classList.remove('visible');
+  if(send){
+    // TODO: trigger actual send via backend -> ai-job-scrape-email-writer
+    console.log('Would send email for profile',profiles[idx].id);
+  }
+  doSwipe('right');
+  setTimeout(()=>renderCards(),300);
+}
+
+async function doSwipe(direction){
+  if(busy||idx>=profiles.length) return;
+  busy=true;
+  const pid=profiles[idx].id;
+  try{
+    await fetch(BASE+'/swipe',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+API_KEY},
+      body:JSON.stringify({profile_id:pid,direction:direction==='right'?'right':'left'})
     });
-  } catch(e) {}
-  idx++;
-  showCurrent();
-  busy = false;
-  document.querySelectorAll('.btn').forEach(b => b.disabled = false);
+  }catch(e){}
+  idx++;busy=false;
 }
 
-// Keyboard shortcuts
-document.addEventListener('keydown', function(e) {
-  if (e.key === 'ArrowLeft' || e.key === '1') doSwipe('left');
-  if (e.key === 'ArrowRight' || e.key === '2') doSwipe('right');
+// Button triggers
+document.getElementById('btnNope').addEventListener('click',()=>{
+  if(!dragCard||busy) return;
+  dragCard.classList.add('exit-left');
+  doSwipe('left');
+  setTimeout(()=>renderCards(),400);
+});
+document.getElementById('btnLike').addEventListener('click',()=>{
+  if(!dragCard||busy) return;
+  dragCard.querySelector('.stamp-like').style.opacity=1;
+  dragCard.querySelector('.stamp-like').style.transform='rotate(15deg) scale(1)';
+  dragCard.classList.add('exit-right');
+  showEmailDraft(profiles[idx]);
+});
+document.getElementById('btnInfo').addEventListener('click',()=>{
+  if(!dragCard) return;
+  dragCard.scrollTo({top:dragCard.querySelector('.card-hero').offsetHeight,behavior:'smooth'});
 });
 
-if (window.matchMedia('(pointer: fine)').matches) {
-  document.getElementById('kbdHint').textContent = 'Keyboard: left arrow = skip, right arrow = connect';
-}
+// Keyboard
+document.addEventListener('keydown',e=>{
+  if(document.getElementById('emailOverlay').classList.contains('visible')) return;
+  if(e.key==='ArrowLeft')document.getElementById('btnNope').click();
+  if(e.key==='ArrowRight')document.getElementById('btnLike').click();
+  if(e.key==='ArrowUp'||e.key==='ArrowDown')document.getElementById('btnInfo').click();
+});
 
 loadProfiles();
 </script>
