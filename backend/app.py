@@ -565,6 +565,7 @@ function closeEmail(send){
       tab:e.profile._tab,row:e.profile._row
     })}).then(r=>r.json()).then(d=>{
       if(d.status==='no_email') showToast('No email found for '+d.name,'red');
+      else if(d.status==='name_mismatch') showToast('BLOCKED: LinkedIn URL is for '+d.enriched_name+', not '+d.name,'red');
       else if(d.email) showToast('Sending to '+d.email,'green');
     }).catch(()=>{});
   }
@@ -787,6 +788,21 @@ def send_email(
         apollo = ApolloClient()
         r = apollo.enrich_by_linkedin(req.linkedin_url)
         email = r.get("email")
+        enriched_name = r.get("name", "")
+        # Safety check: verify enriched person matches intended recipient
+        if email and enriched_name:
+            expected = req.name.lower().split()[0]
+            actual = enriched_name.lower().split()[0]
+            if expected != actual:
+                log.warning(
+                    f"NAME MISMATCH: expected {req.name} but Apollo returned {enriched_name} ({email}). Blocking send."
+                )
+                return {
+                    "status": "name_mismatch",
+                    "name": req.name,
+                    "enriched_name": enriched_name,
+                    "note": f"LinkedIn URL returned {enriched_name}, not {req.name}. Check sheet data.",
+                }
         if not email:
             r = apollo.enrich_by_name(first_name, last_name, req.company)
             email = r.get("email")
