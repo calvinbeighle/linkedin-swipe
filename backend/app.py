@@ -519,10 +519,14 @@ const TEMPLATES=[
 ];
 let tplIdx=parseInt(localStorage.getItem('tplIdx')||'0');
 
-function showEmail(profile, swipedIdx){
+async function showEmail(profile, swipedIdx){
   const fn=(profile.name||'').split(' ')[0];
-  let job=(profile.ai_signal||'AI').replace(/\s*\(.*?\)\s*/g,'').replace(/\s*-\s*/g,' for ').replace(/\s+/g,' ').trim();
+  let job=profile.ai_signal||'AI';
   const co=profile.company||'your company';
+
+  // Clean the job title via LLM
+  try{const r=await fetch(BASE+'/clean-title'+K+'&title='+encodeURIComponent(job));const d=await r.json();if(d.title)job=d.title}catch(e){}
+
   const body=TEMPLATES[tplIdx%TEMPLATES.length](fn,job,co);tplIdx++;localStorage.setItem('tplIdx',tplIdx);
 
   $('emailCard').innerHTML=
@@ -692,6 +696,44 @@ def get_stats(_auth: None = Depends(verify_api_key)):
         "skipped": skipped,
         "reached_out": reached_out,
     }
+
+
+@app.get("/clean-title")
+def clean_title(
+    title: str = Query(""),
+    _auth: None = Depends(verify_api_key),
+):
+    """Use Claude to clean a LinkedIn job title for use in an email."""
+    if not title:
+        return {"title": title}
+    env = os.environ.copy()
+    env["PATH"] = "/usr/local/bin:/usr/bin:/bin"
+    config_env = os.path.expanduser("~/BridgeIntelligence/GTM/config.env")
+    if os.path.exists(config_env):
+        with open(config_env) as f:
+            for line in f:
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.strip().split("=", 1)
+                    env.setdefault(k, v)
+    try:
+        r = subprocess.run(
+            [
+                "/usr/local/bin/claude",
+                "--print",
+                "-p",
+                f'Clean this LinkedIn job title for use in a cold email. Remove location info like "(USA - Remote)", remove parenthetical notes, replace dashes between title parts with natural language. Return ONLY the cleaned title, nothing else. Title: {title}',
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            env=env,
+        )
+        cleaned = r.stdout.strip()
+        if cleaned and len(cleaned) < 200:
+            return {"title": cleaned}
+    except Exception:
+        pass
+    return {"title": title}
 
 
 class EmailAdjustRequest(BaseModel):
