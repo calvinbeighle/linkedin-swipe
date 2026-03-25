@@ -555,7 +555,7 @@ async function adjustEmail(){
 }
 
 function closeEmail(send){
-  if(send&&!inSendWindow()){alert('Emails only send 8am-7:30pm PST.');return}
+  if(send&&!inSendWindow()){if(!confirm('Outside 8am-7:30pm PST. Schedule for next morning?'))return;}
   $('emailOverlay').classList.remove('visible');
   const e=window._email;
   // NOW record the swipe and advance idx
