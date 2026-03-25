@@ -241,6 +241,15 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 .email-card .email-to{font-size:13px;color:rgba(255,255,255,0.5);margin-bottom:16px}
 .email-card .email-subject{font-size:15px;font-weight:600;color:rgba(255,255,255,0.85);margin-bottom:12px}
 .email-card .email-body{font-size:14px;color:rgba(255,255,255,0.75);line-height:1.6;white-space:pre-wrap}
+.email-edit-row{display:flex;gap:8px;margin-top:16px}
+.email-edit-row input{flex:1;padding:12px 14px;border:1px solid rgba(255,255,255,0.15);border-radius:20px;background:rgba(255,255,255,0.08);color:#fff;font-size:14px;font-family:inherit;outline:none}
+.email-edit-row input::placeholder{color:rgba(255,255,255,0.3)}
+.email-edit-row input:focus{border-color:rgba(45,248,138,0.5)}
+.email-edit-row button{padding:10px 18px;border:none;border-radius:20px;background:rgba(33,160,255,0.3);color:#21a0ff;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
+.email-edit-row button:active{opacity:0.7}
+.email-edit-row button:disabled{opacity:0.3}
+.email-loading{font-size:12px;color:rgba(255,255,255,0.4);margin-top:8px;display:none}
+.email-loading.visible{display:block}
 .email-actions{display:flex;gap:12px;margin-top:24px}
 .email-actions button{flex:1;padding:14px;border:none;border-radius:24px;font-size:15px;font-weight:700;cursor:pointer}
 .email-send{background:linear-gradient(135deg,#2DF88A,#21d07a);color:#000}
@@ -469,12 +478,54 @@ function showEmailDraft(p){
     '<h3>Draft Email</h3>'+
     '<div class="email-to">To: '+esc(firstName)+' (enrich via Apollo for email)</div>'+
     '<div class="email-subject">Subject: '+esc(subject)+'</div>'+
-    '<div class="email-body">'+esc(body)+'</div>'+
+    '<div class="email-body" id="emailBody">'+esc(body)+'</div>'+
+    '<div class="email-edit-row">'+
+      '<input type="text" id="emailEditInput" placeholder="e.g. make it shorter, mention their CTO role..." onkeydown="if(event.key===\'Enter\')adjustEmail()">'+
+      '<button onclick="adjustEmail()" id="emailEditBtn">Adjust</button>'+
+    '</div>'+
+    '<div class="email-loading" id="emailLoading">Rewriting...</div>'+
     '<div class="email-actions">'+
       '<button class="email-skip" onclick="dismissEmail(false)">Skip Email</button>'+
       '<button class="email-send" onclick="dismissEmail(true)">Send</button>'+
     '</div>';
   document.getElementById('emailOverlay').classList.add('visible');
+  // Store current draft for adjustment
+  window._currentDraft={body:body,subject:subject,profile:p};
+}
+
+async function adjustEmail(){
+  const input=document.getElementById('emailEditInput');
+  const instruction=input.value.trim();
+  if(!instruction) return;
+  const btn=document.getElementById('emailEditBtn');
+  const loading=document.getElementById('emailLoading');
+  btn.disabled=true;input.disabled=true;
+  loading.classList.add('visible');loading.textContent='Rewriting...';
+  try{
+    const r=await fetch(BASE+'/adjust-email',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+API_KEY},
+      body:JSON.stringify({
+        current_body:window._currentDraft.body,
+        subject:window._currentDraft.subject,
+        instruction:instruction,
+        profile_name:window._currentDraft.profile.name,
+        company:window._currentDraft.profile.company,
+        ai_signal:window._currentDraft.profile.ai_signal
+      })
+    });
+    const data=await r.json();
+    if(data.body){
+      window._currentDraft.body=data.body;
+      document.getElementById('emailBody').textContent=data.body;
+      if(data.subject) window._currentDraft.subject=data.subject;
+    }
+    input.value='';
+  }catch(e){
+    loading.textContent='Failed -- try again';
+  }
+  btn.disabled=false;input.disabled=false;
+  setTimeout(()=>loading.classList.remove('visible'),1500);
 }
 
 function dismissEmail(send){
@@ -550,6 +601,48 @@ def get_pending_profiles(
         .limit(limit)
         .all()
     )
+
+
+class EmailAdjustRequest(BaseModel):
+    current_body: str
+    subject: str
+    instruction: str
+    profile_name: Optional[str] = None
+    company: Optional[str] = None
+    ai_signal: Optional[str] = None
+
+
+@app.post("/adjust-email")
+def adjust_email(
+    req: EmailAdjustRequest,
+    _auth: None = Depends(verify_api_key),
+):
+    """Use Claude API to adjust the email draft based on user instruction."""
+    import subprocess
+
+    prompt = (
+        f"You are rewriting a cold outreach email. The current draft is:\n\n"
+        f"Subject: {req.subject}\n\n{req.current_body}\n\n"
+        f"Context: This email is to {req.profile_name or 'a lead'} at {req.company or 'their company'}."
+        f"{(' AI signal: ' + req.ai_signal) if req.ai_signal else ''}\n\n"
+        f"User instruction: {req.instruction}\n\n"
+        f"Return ONLY the rewritten email body. No subject line, no explanation, "
+        f"no markdown. Keep the same signature (Best, Calvin). Keep it concise."
+    )
+    try:
+        result = subprocess.run(
+            ["claude", "--print", "-p", prompt],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        new_body = result.stdout.strip()
+        if not new_body:
+            raise ValueError("Empty response")
+        return {"body": new_body, "subject": req.subject}
+    except Exception as e:
+        log.error(f"Email adjust failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to adjust email")
 
 
 @app.post("/profiles", status_code=201)
