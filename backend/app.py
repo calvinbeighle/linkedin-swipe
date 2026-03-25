@@ -760,12 +760,17 @@ def send_email(
     if not in_window:
         schedule_note = " (scheduled for 8am PST)"
 
+    import uuid
+
+    contact_file = f"/tmp/contact_{uuid.uuid4().hex[:8]}.json"
+
     prompt = (
         f"Read the skill at ~/.claude/skills/ai-job-scrape-email-writer/SKILL.md.\n\n"
         f"Send an email to this person following the skill's Step 1 (Apollo enrich) and Step 3 (send).\n\n"
         f"LinkedIn URL: {req.linkedin_url}\n"
         f"Name: {req.name}\n"
         f"Company: {req.company or 'unknown'}\n\n"
+        f"IMPORTANT: Use --output {contact_file} for Apollo enrichment (unique file, do not use /tmp/contact.json).\n\n"
         f"If Apollo enrichment fails by LinkedIn URL, try by name: "
         f'--first-name "{first_name}" --last-name "{last_name}" --company "{req.company or ""}"\n\n'
         f"Use this EXACT email body (already approved by user):\n"
