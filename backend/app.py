@@ -533,7 +533,7 @@ async function showEmail(profile, swipedIdx){
   $('emailCard').innerHTML=
     '<h3>Draft Email</h3>'+
     '<div class="email-to">To: '+esc(fn)+' (enrich via Apollo for email)</div>'+
-    '<div class="email-subject" id="emailSubject" contenteditable="true" spellcheck="false" oninput="window._email.subject=this.textContent.replace(/^Subject:\\s*/,\\'\\')">Subject: '+esc(job)+'</div>'+
+    '<div class="email-subject" id="emailSubject" contenteditable="true" spellcheck="false" oninput="window._email.subject=this.textContent.replace(/^Subject: /,&quot;&quot;)">Subject: '+esc(job)+'</div>'+
     '<div class="email-body" id="emailBody" contenteditable="true" spellcheck="false">'+esc(body)+'</div>'+
     '<div class="email-edit-row"><input type="text" id="emailEditInput" placeholder="e.g. make it shorter..." onkeydown="if(event.key===\'Enter\')adjustEmail()"><button onclick="adjustEmail()" id="emailEditBtn">Adjust</button></div>'+
     '<div class="email-loading" id="emailLoading">Rewriting...</div>'+
