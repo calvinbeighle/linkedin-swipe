@@ -40,11 +40,14 @@ BASIC_PASS = os.getenv("SWIPE_BASIC_PASS", "")
 # --- Google Sheets helpers ---------------------------------------------------
 
 
+GWS_BIN = "/usr/local/bin/gws"
+
+
 def _gws_read(tab: str, range_: str) -> dict:
     """Read from a Google Sheet tab via gws CLI."""
     full_range = f"'{tab}'!{range_}"
     result = subprocess.run(
-        ["gws", "sheets", "+read", "--spreadsheet", SHEET_ID, "--range", full_range],
+        [GWS_BIN, "sheets", "+read", "--spreadsheet", SHEET_ID, "--range", full_range],
         capture_output=True,
         text=True,
         timeout=30,
@@ -67,7 +70,7 @@ def _gws_update(tab: str, range_: str, values: list) -> bool:
     body = json.dumps({"values": values})
     result = subprocess.run(
         [
-            "gws",
+            GWS_BIN,
             "sheets",
             "spreadsheets",
             "values",
