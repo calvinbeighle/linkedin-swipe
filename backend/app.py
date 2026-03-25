@@ -559,19 +559,23 @@ function closeEmail(send){
   lastIdx=e.swipedIdx; idx=e.swipedIdx+1;
   api('/swipe',{tab:e.profile._tab,row:e.profile._row,direction:'right'});
   if(send){
-    // Fire off the email via Claude Code + ai-job-scrape-email-writer skill
-    api('/send-email',{
-      linkedin_url:e.profile.linkedin_url,
-      name:e.profile.name,
-      company:e.profile.company,
-      ai_signal:e.profile.ai_signal,
-      subject:e.subject,
-      body:$('emailBody').innerText,
-      tab:e.profile._tab,
-      row:e.profile._row
-    });
+    fetch(BASE+'/send-email',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+API_KEY},body:JSON.stringify({
+      linkedin_url:e.profile.linkedin_url,name:e.profile.name,company:e.profile.company,
+      ai_signal:e.profile.ai_signal,subject:e.subject,body:$('emailBody').innerText,
+      tab:e.profile._tab,row:e.profile._row
+    })}).then(r=>r.json()).then(d=>{
+      if(d.status==='no_email') showToast('No email found for '+d.name,'red');
+      else if(d.email) showToast('Sending to '+d.email,'green');
+    }).catch(()=>{});
   }
   setTimeout(render,300);
+}
+function showToast(msg,color){
+  const t=document.createElement('div');
+  t.style.cssText='position:fixed;top:60px;left:50%;transform:translateX(-50%);padding:12px 24px;border-radius:20px;font-size:14px;font-weight:600;z-index:200;pointer-events:none;opacity:0;transition:opacity .3s;background:'+(color==='red'?'rgba(254,60,114,.9)':'rgba(45,248,138,.9)')+';color:'+(color==='red'?'#fff':'#000');
+  t.textContent=msg;document.body.appendChild(t);
+  requestAnimationFrame(()=>{t.style.opacity='1'});
+  setTimeout(()=>{t.style.opacity='0';setTimeout(()=>t.remove(),300)},3000);
 }
 
 // ── Buttons ──
@@ -755,54 +759,62 @@ def send_email(
     req: SendEmailRequest,
     _auth: None = Depends(verify_api_key),
 ):
-    """Enrich contact via Apollo, send email via Gmail, using ai-job-scrape-email-writer skill."""
+    """Enrich via Apollo (sync), then fire-and-forget Claude Code to send."""
+    import sys as _sys
+    import uuid
+
     html_body = req.body.replace("\n", "<br>")
     first_name = req.name.split()[0] if req.name else ""
     last_name = " ".join(req.name.split()[1:]) if req.name else ""
 
-    # Check send window -- if outside, note it
-    pst = timezone(timedelta(hours=-7))
-    now_pst = datetime.now(pst)
-    in_window = 8 <= now_pst.hour < 19 or (now_pst.hour == 19 and now_pst.minute <= 30)
-    schedule_note = ""
-    if not in_window:
-        schedule_note = " (scheduled for 8am PST)"
+    # Load API keys
+    config_env = os.path.expanduser("~/BridgeIntelligence/GTM/config.env")
+    if os.path.exists(config_env):
+        with open(config_env) as f:
+            for line in f:
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.strip().split("=", 1)
+                    os.environ.setdefault(k, v)
 
-    import uuid
+    # Step 1: Apollo enrichment (synchronous)
+    _sys.path.insert(
+        0, os.path.expanduser("~/.claude/skills/apollo-enrichment/scripts")
+    )
+    email = None
+    try:
+        from apollo_client import ApolloClient
 
-    contact_file = f"/tmp/contact_{uuid.uuid4().hex[:8]}.json"
+        apollo = ApolloClient()
+        r = apollo.enrich_by_linkedin(req.linkedin_url)
+        email = r.get("email")
+        if not email:
+            r = apollo.enrich_by_name(first_name, last_name, req.company)
+            email = r.get("email")
+    except Exception as e:
+        log.error(f"Apollo enrichment failed: {e}")
 
+    if not email:
+        log.warning(f"No email found for {req.name}")
+        return {"status": "no_email", "name": req.name}
+
+    # Step 2: Fire-and-forget Claude Code to send
     prompt = (
         f"Read the skill at ~/.claude/skills/ai-job-scrape-email-writer/SKILL.md.\n\n"
-        f"Send an email to this person. Try ALL of these enrichment methods in order until you get an email:\n\n"
-        f'1. Apollo enrich by LinkedIn URL: --linkedin "{req.linkedin_url}" --output {contact_file}\n'
-        f'2. Apollo enrich by name+company: --first-name "{first_name}" --last-name "{last_name}" --company "{req.company or ""}" --output {contact_file}\n'
-        f"3. If both fail, guess the email pattern from the company domain. "
-        f"Look up the company domain, then try firstname@domain, first.last@domain, flast@domain.\n\n"
-        f"LinkedIn URL: {req.linkedin_url}\n"
-        f"Name: {req.name}\n"
-        f"Company: {req.company or 'unknown'}\n\n"
+        f"Send an email to {email} ({req.name} at {req.company or 'unknown'}).\n"
+        f"The email address is already known. Skip Apollo enrichment. Go directly to Step 3 (send).\n\n"
         f"Use this EXACT email body (already approved by user):\n"
         f"Subject: {req.subject}\n"
         f"Body: {html_body}\n\n"
-        f"Do NOT modify the email body. Just find the email address and send.\n"
+        f"Do NOT modify the email body.\n"
         f"After sending, update Google Sheet {SHEET_ID} tab '{req.tab or 'Prospect Tracker'}' "
         f"row {req.row or 'find by name'}: set Date Sent column to today's date."
     )
 
-    try:
-        env = os.environ.copy()
-        env["PATH"] = "/usr/local/bin:/usr/bin:/bin"
-        # Load API key from config.env if not already set
-        config_env = os.path.expanduser("~/BridgeIntelligence/GTM/config.env")
-        if os.path.exists(config_env):
-            with open(config_env) as f:
-                for line in f:
-                    if "=" in line and not line.startswith("#"):
-                        k, v = line.strip().split("=", 1)
-                        env[k] = v
+    env = os.environ.copy()
+    env["PATH"] = "/usr/local/bin:/usr/bin:/bin"
 
-        result = subprocess.Popen(
+    try:
+        proc = subprocess.Popen(
             [
                 "/usr/local/bin/claude",
                 "--print",
@@ -816,16 +828,11 @@ def send_email(
             env=env,
             text=True,
         )
-        log.info(f"Email send started for {req.name} (pid {result.pid}){schedule_note}")
-        return {
-            "status": "sending",
-            "name": req.name,
-            "pid": result.pid,
-            "note": f"Enriching via Apollo and sending{schedule_note}",
-        }
+        log.info(f"Email sending to {email} for {req.name} (pid {proc.pid})")
+        return {"status": "sending", "name": req.name, "email": email}
     except Exception as e:
         log.error(f"Failed to start email send: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to start email send: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # --- HeyReach integration ---------------------------------------------------
