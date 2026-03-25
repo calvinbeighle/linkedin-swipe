@@ -532,7 +532,7 @@ async function showEmail(profile, swipedIdx){
   $('emailCard').innerHTML=
     '<h3>Draft Email</h3>'+
     '<div class="email-to">To: '+esc(fn)+' (enrich via Apollo for email)</div>'+
-    '<div class="email-subject">Subject: '+esc(job)+'</div>'+
+    '<div class="email-subject" id="emailSubject">Subject: '+esc(job)+'</div>'+
     '<div class="email-body" id="emailBody" contenteditable="true" spellcheck="false">'+esc(body)+'</div>'+
     '<div class="email-edit-row"><input type="text" id="emailEditInput" placeholder="e.g. make it shorter..." onkeydown="if(event.key===\'Enter\')adjustEmail()"><button onclick="adjustEmail()" id="emailEditBtn">Adjust</button></div>'+
     '<div class="email-loading" id="emailLoading">Rewriting...</div>'+
@@ -551,6 +551,7 @@ async function adjustEmail(){
     const e=window._email;
     const r=await(await fetch(BASE+'/adjust-email',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+API_KEY},body:JSON.stringify({current_body:$('emailBody').innerText,subject:e.subject,instruction:v,profile_name:e.profile.name,company:e.profile.company,ai_signal:e.profile.ai_signal})})).json();
     if(r.body){window._email.body=r.body;$('emailBody').textContent=r.body}
+    if(r.subject){window._email.subject=r.subject;$('emailSubject').textContent='Subject: '+r.subject}
     inp.value='';
   }catch(err){ld.textContent='Failed -- try again'}
   btn.disabled=inp.disabled=false;
@@ -757,8 +758,10 @@ def adjust_email(
         f"Context: This email is to {req.profile_name or 'a lead'} at {req.company or 'their company'}."
         f"{(' AI signal: ' + req.ai_signal) if req.ai_signal else ''}\n\n"
         f"User instruction: {req.instruction}\n\n"
-        f"Return ONLY the rewritten email body. No subject line, no explanation, "
-        f"no markdown. Keep the same signature (Best, Calvin). Keep it concise."
+        f"Return the result in exactly this format (two lines then the body):\n"
+        f"SUBJECT: <the subject line>\n"
+        f"BODY:\n<the email body>\n\n"
+        f"Keep the same signature (Best, Calvin). Keep it concise. No markdown."
     )
     try:
         env = os.environ.copy()
@@ -777,10 +780,19 @@ def adjust_email(
             timeout=30,
             env=env,
         )
-        new_body = result.stdout.strip()
-        if not new_body:
+        output = result.stdout.strip()
+        if not output:
             raise ValueError("Empty response")
-        return {"body": new_body, "subject": req.subject}
+        # Parse SUBJECT: and BODY: format
+        new_subject = req.subject
+        new_body = output
+        if "SUBJECT:" in output and "BODY:" in output:
+            parts = output.split("BODY:", 1)
+            subject_line = parts[0].strip()
+            if subject_line.startswith("SUBJECT:"):
+                new_subject = subject_line[8:].strip()
+            new_body = parts[1].strip()
+        return {"body": new_body, "subject": new_subject}
     except Exception as e:
         log.error(f"Email adjust failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to adjust email")
