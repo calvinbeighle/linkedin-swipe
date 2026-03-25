@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 load_dotenv()
@@ -158,6 +159,13 @@ def _map_row(row_dict: dict) -> dict:
         profile["icp_score"] = int(str(profile["icp_score"]).replace(",", ""))
     except (ValueError, TypeError):
         profile["icp_score"] = None
+    # Check for locally downloaded photo
+    linkedin_url = profile.get("linkedin_url", "")
+    slug = linkedin_url.rstrip("/").split("/")[-1] if linkedin_url else ""
+    if slug:
+        photo_path = os.path.join(PHOTOS_DIR, f"{slug}.jpg")
+        if os.path.exists(photo_path):
+            profile["photo_url"] = f"/photos/{slug}.jpg"
     return profile
 
 
@@ -196,6 +204,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serve downloaded profile photos
+PHOTOS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "photos")
+os.makedirs(PHOTOS_DIR, exist_ok=True)
+app.mount("/photos", StaticFiles(directory=PHOTOS_DIR), name="photos")
 
 
 def check_basic_auth(request: Request):
