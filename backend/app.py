@@ -336,7 +336,8 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 .email-card{background:#1a1a1a;border-radius:16px;width:100%;max-width:420px;max-height:80vh;overflow-y:auto;padding:28px 24px}
 .email-card h3{font-size:18px;font-weight:700;color:#2DF88A;margin-bottom:4px}
 .email-card .email-to{font-size:13px;color:rgba(255,255,255,0.5);margin-bottom:16px}
-.email-card .email-subject{font-size:15px;font-weight:600;color:rgba(255,255,255,0.85);margin-bottom:12px}
+.email-card .email-subject{font-size:15px;font-weight:600;color:rgba(255,255,255,0.85);margin-bottom:12px;cursor:text;border-radius:6px;padding:6px 8px;margin:-6px -8px 12px;transition:background .15s}
+.email-card .email-subject:focus{outline:none;background:rgba(255,255,255,0.06)}
 .email-card .email-body{font-size:14px;color:rgba(255,255,255,0.75);line-height:1.6;white-space:pre-wrap;cursor:text;border-radius:8px;padding:12px;margin:-12px;transition:background 0.15s}
 .email-card .email-body:focus{outline:none;background:rgba(255,255,255,0.06)}
 .email-edit-row{display:flex;gap:8px;margin-top:16px}
@@ -532,7 +533,7 @@ async function showEmail(profile, swipedIdx){
   $('emailCard').innerHTML=
     '<h3>Draft Email</h3>'+
     '<div class="email-to">To: '+esc(fn)+' (enrich via Apollo for email)</div>'+
-    '<div class="email-subject" id="emailSubject">Subject: '+esc(job)+'</div>'+
+    '<div class="email-subject" id="emailSubject" contenteditable="true" spellcheck="false" oninput="window._email.subject=this.textContent.replace(/^Subject:\\s*/,\\'\\')">Subject: '+esc(job)+'</div>'+
     '<div class="email-body" id="emailBody" contenteditable="true" spellcheck="false">'+esc(body)+'</div>'+
     '<div class="email-edit-row"><input type="text" id="emailEditInput" placeholder="e.g. make it shorter..." onkeydown="if(event.key===\'Enter\')adjustEmail()"><button onclick="adjustEmail()" id="emailEditBtn">Adjust</button></div>'+
     '<div class="email-loading" id="emailLoading">Rewriting...</div>'+
@@ -779,6 +780,7 @@ def adjust_email(
             text=True,
             timeout=30,
             env=env,
+            stdin=subprocess.DEVNULL,
         )
         output = result.stdout.strip()
         if not output:
