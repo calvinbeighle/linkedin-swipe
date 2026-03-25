@@ -521,7 +521,7 @@ let tplIdx=parseInt(localStorage.getItem('tplIdx')||'0');
 
 function showEmail(profile, swipedIdx){
   const fn=(profile.name||'').split(' ')[0];
-  const job=profile.ai_signal||'AI';
+  let job=(profile.ai_signal||'AI').replace(/\s*\(.*?\)\s*/g,'').replace(/\s*-\s*/g,' for ').replace(/\s+/g,' ').trim();
   const co=profile.company||'your company';
   const body=TEMPLATES[tplIdx%TEMPLATES.length](fn,job,co);tplIdx++;localStorage.setItem('tplIdx',tplIdx);
 
