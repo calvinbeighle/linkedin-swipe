@@ -11,9 +11,12 @@ from typing import List, Optional
 
 import requests
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
+import secrets
+import hashlib
+import base64
 from pydantic import BaseModel
 from sqlalchemy import Column, DateTime, Integer, String, Text, create_engine
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
@@ -129,6 +132,29 @@ app.add_middleware(
 )
 
 API_KEY = os.getenv("SWIPE_API_KEY", "")
+BASIC_USER = os.getenv("SWIPE_BASIC_USER", "calvin")
+BASIC_PASS = os.getenv("SWIPE_BASIC_PASS", "")
+
+
+def check_basic_auth(request: Request):
+    """Return True if request has valid basic auth or session cookie."""
+    # Check session cookie first
+    if (
+        request.cookies.get("swipe_session")
+        == hashlib.sha256((BASIC_PASS + API_KEY).encode()).hexdigest()[:32]
+    ):
+        return True
+    # Check basic auth header
+    auth = request.headers.get("authorization", "")
+    if auth.startswith("Basic "):
+        try:
+            decoded = base64.b64decode(auth[6:]).decode()
+            user, pwd = decoded.split(":", 1)
+            if user == BASIC_USER and pwd == BASIC_PASS:
+                return True
+        except Exception:
+            pass
+    return False
 
 
 def verify_api_key(authorization: str = Header(None), key: str = Query(None)):
@@ -153,15 +179,32 @@ def get_db():
 # --- Web App (served as HTML) -----------------------------------------------
 
 
-@app.get("/", response_class=RedirectResponse)
-def root():
-    return RedirectResponse(url="/app?key=" + API_KEY)
+@app.get("/")
+def root(request: Request):
+    if BASIC_PASS and not check_basic_auth(request):
+        return Response(
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="Lead Swipe"'},
+            content="Unauthorized",
+        )
+    resp = RedirectResponse(url="/app?key=" + API_KEY)
+    if BASIC_PASS:
+        resp.set_cookie(
+            "swipe_session",
+            hashlib.sha256((BASIC_PASS + API_KEY).encode()).hexdigest()[:32],
+            httponly=True,
+            samesite="lax",
+            max_age=86400 * 30,
+        )
+    return resp
 
 
 @app.get("/app", response_class=HTMLResponse)
-def serve_app(key: str = Query("")):
-    """Serve the swipe web app. Auth via ?key= query param."""
+def serve_app(request: Request, key: str = Query("")):
+    """Serve the swipe web app. Auth via ?key= or basic auth."""
     if key != API_KEY:
+        if BASIC_PASS and check_basic_auth(request):
+            return RedirectResponse(url="/app?key=" + API_KEY)
         return HTMLResponse("<h1>Invalid key</h1>", status_code=401)
 
     return HTMLResponse(WEB_APP_HTML.replace("__API_KEY__", key))
