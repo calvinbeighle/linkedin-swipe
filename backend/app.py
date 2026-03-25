@@ -515,9 +515,7 @@ stackEl.addEventListener('pointerdown',function(e){
 // ── Email ──
 
 const TEMPLATES=[
-  (n,j,c)=>'Hi '+n+',\n\nI graduated from Harvard and have been deeply involved in AI since December \'22. I came across the '+j+' role on LinkedIn and would love to ask a few questions about the position and learn more about what '+c+' has planned.\n\nHave a great day!\n\nBest,\nCalvin',
-  (n,j,c)=>'Hi '+n+',\n\nI\'m a recent Harvard grad and have been working in the AI space since December \'22. I came across the '+j+' role on LinkedIn and would love to learn more about the position and what '+c+' has planned.\n\nHave a great day!\n\nBest,\nCalvin',
-  (n,j,c)=>'Hi '+n+',\n\nI graduated from Harvard and have been deeply involved in AI since December \'22. I came across the '+j+' role on LinkedIn and would love to ask a few questions about the position and learn more about what '+c+' has planned on the agents front.\n\nHave a great day!\n\nBest,\nCalvin',
+  (n,j,c)=>'Hi '+n+',\n\nI graduated from Harvard and have been deeply involved in AI since December \'22. I came across the '+j+' role on LinkedIn and would love to ask a few questions about the position.\n\nHave a great day!\n\nBest,\nCalvin',
 ];
 let tplIdx=parseInt(localStorage.getItem('tplIdx')||'0');
 
