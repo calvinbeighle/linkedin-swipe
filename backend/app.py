@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import subprocess
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 import requests
@@ -751,9 +752,7 @@ def send_email(
     first_name = req.name.split()[0] if req.name else ""
     last_name = " ".join(req.name.split()[1:]) if req.name else ""
 
-    # Check send window -- if outside, schedule for 8am PST
-    from datetime import timezone, timedelta
-
+    # Check send window -- if outside, note it
     pst = timezone(timedelta(hours=-7))
     now_pst = datetime.now(pst)
     in_window = 8 <= now_pst.hour < 19 or (now_pst.hour == 19 and now_pst.minute <= 30)
