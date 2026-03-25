@@ -387,169 +387,196 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 <div class="empty" id="emptyState"><h2>No more leads</h2><p>You've reviewed everyone</p><button onclick="loadProfiles()">Refresh</button></div>
 
 <script>
-const API_KEY='__API_KEY__',BASE=window.location.origin,K='?key='+API_KEY;
-let profiles=[],idx=0,animating=false,dragCard=null,startX=0,currentX=0,dragging=false,lastSwipedIdx=-1;
-const stack=document.getElementById('stack');
+const API_KEY='__API_KEY__', BASE=window.location.origin, K='?key='+API_KEY;
+const $=id=>document.getElementById(id);
+const stackEl=$('stack');
+
+let profiles=[], idx=0, locked=false, lastIdx=-1;
 
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
-function initials(n){return n.split(' ').map(w=>w[0]).filter(Boolean).slice(0,2).join('').toUpperCase()}
+function ini(n){return n.split(' ').map(w=>w[0]).filter(Boolean).slice(0,2).join('').toUpperCase()}
 function icpCls(s){return s>=75?'icp-high':s>=50?'icp-mid':'icp-low'}
-function inSendWindow(){
-  const pst=new Date(new Date().toLocaleString('en-US',{timeZone:'America/Los_Angeles'}));
-  const h=pst.getHours(),m=pst.getMinutes();
-  return h>=8&&(h<19||(h===19&&m<=30));
-}
+function inSendWindow(){const p=new Date(new Date().toLocaleString('en-US',{timeZone:'America/Los_Angeles'}));const h=p.getHours();return h>=8&&(h<19||(h===19&&p.getMinutes()<=30))}
+function api(path,body){return fetch(BASE+path,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+API_KEY},body:JSON.stringify(body)}).catch(()=>{})}
+
+// ── Load & Render ──
 
 async function loadProfiles(){
-  document.getElementById('emptyState').classList.remove('visible');
-  stack.style.display='';document.getElementById('actions').style.display='';
-  try{
-    profiles=(await(await fetch(BASE+'/profiles'+K+'&limit=200')).json());
-    idx=0;lastSwipedIdx=-1;renderCards();
-  }catch(e){console.error(e)}
+  $('emptyState').classList.remove('visible');
+  stackEl.style.display='';$('actions').style.display='';
+  try{profiles=await(await fetch(BASE+'/profiles'+K+'&limit=200')).json();idx=0;lastIdx=-1;render()}catch(e){console.error(e)}
 }
 
-function renderCards(){
-  stack.innerHTML='';
-  if(idx>=profiles.length){
-    stack.style.display='none';document.getElementById('actions').style.display='none';
-    document.getElementById('emptyState').classList.add('visible');
-    document.getElementById('counter').textContent='';return;
+function render(){
+  stackEl.innerHTML='';
+  if(idx>=profiles.length){stackEl.style.display='none';$('actions').style.display='none';$('emptyState').classList.add('visible');$('counter').textContent='';return}
+  if(idx+1<profiles.length) stackEl.appendChild(makeCard(profiles[idx+1],false));
+  stackEl.appendChild(makeCard(profiles[idx],true));
+  $('counter').textContent=(idx+1)+' / '+profiles.length;
+  $('btnUndo').classList.toggle('disabled',lastIdx<0);
+  locked=false;
+}
+
+function makeCard(p,isTop){
+  const c=document.createElement('div');c.className='card '+(isTop?'top':'behind');
+  let bg='';
+  if(p.photo_url) bg='background-image:url('+p.photo_url.replace(/'/g,'%27')+')';
+  else if(p.company){const d=p.company.toLowerCase().replace(/[^a-z0-9]/g,'')+'.com';bg='background-image:url(https://logo.clearbit.com/'+d+'?size=400);background-size:40%;background-repeat:no-repeat;background-position:center 30%'}
+
+  let meta=[];if(p.location)meta.push(esc(p.location));if(p.employee_count)meta.push(esc(p.employee_count)+' employees');
+  let icp='';if(p.icp_score!=null&&p.icp_score<=100)icp='<span class="icp '+icpCls(p.icp_score)+'">'+p.icp_score+'</span>';
+
+  let det='';
+  if(p.company_summary)det+='<div class="detail-section"><div class="detail-label">Company</div><div class="detail-text">'+esc(p.company_summary)+'</div></div>';
+  if(p.ai_signal){let t=esc(p.ai_signal);if(p.ai_signal_analysis)t+='<br><span style="color:rgba(255,255,255,.55);font-size:13px">'+esc(p.ai_signal_analysis)+'</span>';det+='<div class="detail-section"><div class="detail-label">AI Signal</div><div class="detail-text">'+t+'</div></div>'}
+  if(p.why_trace_fits)det+='<div class="detail-section"><div class="detail-label">Why Trace Fits</div><div class="detail-text">'+esc(p.why_trace_fits)+'</div></div>';
+  if(p.recommended_approach)det+='<div class="detail-section"><div class="detail-label">Approach</div><div class="detail-text">'+esc(p.recommended_approach)+'</div></div>';
+  det+='<div class="detail-links"><a class="link-li" href="'+esc(p.linkedin_url)+'" target="_blank">LinkedIn</a>';
+  if(p.job_search_url)det+='<a class="link-job" href="'+esc(p.job_search_url)+'" target="_blank">AI Job Posting</a>';
+  det+='</div>';
+
+  c.innerHTML='<div class="card-hero"><div class="card-photo" style="'+bg+'">'+(p.photo_url?'':'<div class="initials">'+ini(p.name||'?')+'</div>')+'</div><div class="card-gradient"></div><div class="stamp stamp-nope">NOPE</div><div class="stamp stamp-like">LIKE</div><div class="card-info"><div class="card-name">'+esc(p.name||'')+' '+icp+'</div>'+(p.headline?'<div class="card-title">'+esc(p.headline)+'</div>':'')+(p.company?'<div class="card-company">'+esc(p.company)+'</div>':'')+(meta.length?'<div class="card-meta">'+meta.join(' / ')+'</div>':'')+(det?'<div class="scroll-hint">SCROLL DOWN FOR MORE</div>':'')+'</div></div>'+(det?'<div class="card-below">'+det+'</div>':'');
+  return c;
+}
+
+// ── Swipe Logic (simple, no races) ──
+
+function doSwipe(dir){
+  if(locked||idx>=profiles.length) return;
+  locked=true;
+
+  // Capture who we're swiping BEFORE any idx change
+  const swipedProfile=profiles[idx];
+  const swipedIdx=idx;
+  const card=stackEl.querySelector('.card.top');
+  if(!card){locked=false;return}
+
+  if(dir==='left'){
+    card.querySelector('.stamp-nope').style.opacity='1';
+    card.classList.add('exit-left');
+    lastIdx=swipedIdx; idx++;
+    api('/swipe',{tab:swipedProfile._tab,row:swipedProfile._row,direction:'left'});
+    setTimeout(render,400);
+  } else {
+    card.querySelector('.stamp-like').style.opacity='1';
+    card.classList.add('exit-right');
+    // Show email for THIS person, don't advance idx yet
+    showEmail(swipedProfile, swipedIdx);
   }
-  // Render behind card first, then top card on top
-  if(idx+1<profiles.length) stack.appendChild(createCard(profiles[idx+1],false));
-  stack.appendChild(createCard(profiles[idx],true));
-  document.getElementById('counter').textContent=(idx+1)+' / '+profiles.length;
-  document.getElementById('btnUndo').classList.toggle('disabled',lastSwipedIdx<0);
-  dragCard=stack.querySelector('.card.top');
-  animating=false;
 }
 
-function createCard(p,isTop){
-  const card=document.createElement('div');
-  card.className='card '+(isTop?'top':'behind');
-  let photoStyle='';
-  if(p.photo_url) photoStyle='background-image:url('+p.photo_url.replace(/'/g,'%27')+')';
-  else if(p.company){const d=p.company.toLowerCase().replace(/[^a-z0-9]/g,'')+ '.com';photoStyle='background-image:url(https://logo.clearbit.com/'+d+'?size=400);background-size:40%;background-repeat:no-repeat;background-position:center 30%'}
-  let meta=[];
-  if(p.location) meta.push(esc(p.location));
-  if(p.employee_count) meta.push(esc(p.employee_count)+' employees');
-  let icpHtml='';
-  if(p.icp_score!=null&&p.icp_score<=100) icpHtml='<span class="icp '+icpCls(p.icp_score)+'">'+p.icp_score+'</span>';
-  let below='';
-  if(p.company_summary) below+='<div class="detail-section"><div class="detail-label">Company</div><div class="detail-text">'+esc(p.company_summary)+'</div></div>';
-  if(p.ai_signal){let t=esc(p.ai_signal);if(p.ai_signal_analysis) t+='<br><span style="color:rgba(255,255,255,0.55);font-size:13px">'+esc(p.ai_signal_analysis)+'</span>';below+='<div class="detail-section"><div class="detail-label">AI Signal</div><div class="detail-text">'+t+'</div></div>'}
-  if(p.why_trace_fits) below+='<div class="detail-section"><div class="detail-label">Why Trace Fits</div><div class="detail-text">'+esc(p.why_trace_fits)+'</div></div>';
-  if(p.recommended_approach) below+='<div class="detail-section"><div class="detail-label">Approach</div><div class="detail-text">'+esc(p.recommended_approach)+'</div></div>';
-  below+='<div class="detail-links"><a class="link-li" href="'+esc(p.linkedin_url)+'" target="_blank">LinkedIn</a>';
-  if(p.job_search_url) below+='<a class="link-job" href="'+esc(p.job_search_url)+'" target="_blank">AI Job Posting</a>';
-  below+='</div>';
-  card.innerHTML='<div class="card-hero"><div class="card-photo" style="'+photoStyle+'">'+(p.photo_url?'':'<div class="initials">'+initials(p.name||'?')+'</div>')+'</div><div class="card-gradient"></div><div class="stamp stamp-nope">NOPE</div><div class="stamp stamp-like">LIKE</div><div class="card-info"><div class="card-name">'+esc(p.name||'Profile')+' '+icpHtml+'</div>'+(p.headline?'<div class="card-title">'+esc(p.headline)+'</div>':'')+(p.company?'<div class="card-company">'+esc(p.company)+'</div>':'')+(meta.length?'<div class="card-meta">'+meta.join(' / ')+'</div>':'')+(below?'<div class="scroll-hint">SCROLL DOWN FOR MORE</div>':'')+'</div></div>'+(below?'<div class="card-below">'+below+'</div>':'');
-  if(isTop) card.addEventListener('pointerdown',onStart);
-  return card;
+function doUndo(){
+  if(locked||lastIdx<0) return;
+  locked=true;
+  const p=profiles[lastIdx];
+  api('/undo',{tab:p._tab,row:p._row});
+  idx=lastIdx; lastIdx=-1;
+  render();
 }
 
 // ── Drag ──
-function onStart(e){
-  if(animating) return;
+
+stackEl.addEventListener('pointerdown',function(e){
+  if(locked) return;
+  const card=stackEl.querySelector('.card.top');
+  if(!card||!card.contains(e.target)) return;
   if(e.target.closest('.detail-links,.card-below a')) return;
-  startX=e.clientX;currentX=0;dragging=false;
-  const onM=e=>{
-    const dx=e.clientX-startX,dy=e.clientY-(e._startY||e.clientY);
-    if(!dragging){
-      if(Math.abs(dx)>8&&Math.abs(dx)>Math.abs(e.clientY-startX)&&dragCard.scrollTop<10){
-        dragging=true;dragCard.setPointerCapture(e.pointerId);dragCard.style.transition='none';dragCard.style.overflow='hidden';
-      } else{e._startY=e._startY||e.clientY;return}
+
+  const sx=e.clientX, sy=e.clientY;
+  let dx=0, active=false;
+
+  function onMove(ev){
+    dx=ev.clientX-sx;
+    const dy=ev.clientY-sy;
+    if(!active){
+      if(Math.abs(dx)>10&&Math.abs(dx)>Math.abs(dy)&&card.scrollTop<10){
+        active=true;card.setPointerCapture(ev.pointerId);card.style.transition='none';card.style.overflow='hidden';
+      } else return;
     }
-    currentX=dx;
-    dragCard.style.transform='translateX('+currentX+'px) rotate('+(currentX*0.06)+'deg)';
-    const n=dragCard.querySelector('.stamp-nope'),l=dragCard.querySelector('.stamp-like'),t=Math.min(Math.abs(currentX)/120,1);
-    if(currentX<-20){n.style.opacity=t;l.style.opacity=0}
-    else if(currentX>20){l.style.opacity=t;n.style.opacity=0}
+    card.style.transform='translateX('+dx+'px) rotate('+(dx*0.06)+'deg)';
+    const n=card.querySelector('.stamp-nope'),l=card.querySelector('.stamp-like'),t=Math.min(Math.abs(dx)/120,1);
+    if(dx<-20){n.style.opacity=t;l.style.opacity=0}
+    else if(dx>20){l.style.opacity=t;n.style.opacity=0}
     else{n.style.opacity=0;l.style.opacity=0}
-  };
-  const onU=()=>{
-    document.removeEventListener('pointermove',onM);
-    document.removeEventListener('pointerup',onU);
-    if(!dragging) return;
-    dragCard.style.overflow='';
-    if(Math.abs(currentX)>100){swipeCard(currentX>0?'right':'left')}
-    else{dragCard.style.transition='transform 0.3s ease-out';dragCard.style.transform='';dragCard.querySelector('.stamp-nope').style.opacity=0;dragCard.querySelector('.stamp-like').style.opacity=0}
-    dragging=false;
-  };
-  document.addEventListener('pointermove',onM);
-  document.addEventListener('pointerup',onU);
-}
-
-function swipeCard(dir){
-  if(animating||idx>=profiles.length) return;
-  animating=true;
-  const card=dragCard;
-  if(dir==='left'){
-    card.querySelector('.stamp-nope').style.opacity=1;
-    card.classList.add('exit-left');
-    recordSwipe('left');
-    card.addEventListener('transitionend',()=>renderCards(),{once:true});
-    setTimeout(()=>{if(animating)renderCards()},500);
-  } else {
-    card.querySelector('.stamp-like').style.opacity=1;
-    card.classList.add('exit-right');
-    showEmailDraft(profiles[idx]);
   }
-}
-
-async function recordSwipe(direction){
-  const p=profiles[idx];
-  lastSwipedIdx=idx;idx++;
-  fetch(BASE+'/swipe',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+API_KEY},body:JSON.stringify({tab:p._tab,row:p._row,direction})}).catch(()=>{});
-}
+  function onUp(){
+    document.removeEventListener('pointermove',onMove);
+    document.removeEventListener('pointerup',onUp);
+    if(!active) return;
+    card.style.overflow='';
+    if(Math.abs(dx)>100){doSwipe(dx>0?'right':'left')}
+    else{card.style.transition='transform .3s ease-out';card.style.transform='';card.querySelector('.stamp-nope').style.opacity=0;card.querySelector('.stamp-like').style.opacity=0}
+  }
+  document.addEventListener('pointermove',onMove);
+  document.addEventListener('pointerup',onUp);
+});
 
 // ── Email ──
-const ET=[
+
+const TEMPLATES=[
   (n,j,c)=>'Hi '+n+',\n\nI graduated from Harvard and have been deeply involved in AI since December \'22. I came across the '+j+' role on LinkedIn and would love to ask a few questions about the position and learn more about what '+c+' has planned on the AI front.\n\nHave a great day!\n\nBest,\nCalvin',
   (n,j,c)=>'Hi '+n+',\n\nI\'m a recent Harvard grad and have been working in the AI space since December \'22. I came across the '+j+' role on LinkedIn and would love to learn more about the position and what '+c+' has planned on the AI front.\n\nHave a great day!\n\nBest,\nCalvin',
   (n,j,c)=>'Hi '+n+',\n\nI graduated from Harvard and have been deeply involved in AI since December \'22. I came across the '+j+' role on LinkedIn and would love to ask a few questions about the position and learn more about what '+c+' has planned on the agents front.\n\nHave a great day!\n\nBest,\nCalvin',
 ];
-let ti=0;
-function showEmailDraft(p){
-  const fn=(p.name||'').split(' ')[0],job=p.ai_signal||'AI',co=p.company||'your company';
-  const body=ET[ti%ET.length](fn,job,co);ti++;
-  document.getElementById('emailCard').innerHTML='<h3>Draft Email</h3><div class="email-to">To: '+esc(fn)+' (enrich via Apollo for email)</div><div class="email-subject">Subject: '+esc(job)+'</div><div class="email-body" id="emailBody" contenteditable="true" spellcheck="false" oninput="window._cd.body=this.innerText">'+esc(body)+'</div><div class="email-edit-row"><input type="text" id="emailEditInput" placeholder="e.g. make it shorter..." onkeydown="if(event.key===\'Enter\')adjustEmail()"><button onclick="adjustEmail()" id="emailEditBtn">Adjust</button></div><div class="email-loading" id="emailLoading">Rewriting...</div><div class="email-actions"><button class="email-skip" onclick="dismissEmail(false)">Skip Email</button><button class="email-send" onclick="dismissEmail(true)">Send</button></div>';
-  document.getElementById('emailOverlay').classList.add('visible');
-  window._cd={body,subject:job,profile:p};
+let tplIdx=0;
+
+function showEmail(profile, swipedIdx){
+  const fn=(profile.name||'').split(' ')[0];
+  const job=profile.ai_signal||'AI';
+  const co=profile.company||'your company';
+  const body=TEMPLATES[tplIdx++%TEMPLATES.length](fn,job,co);
+
+  $('emailCard').innerHTML=
+    '<h3>Draft Email</h3>'+
+    '<div class="email-to">To: '+esc(fn)+' (enrich via Apollo for email)</div>'+
+    '<div class="email-subject">Subject: '+esc(job)+'</div>'+
+    '<div class="email-body" id="emailBody" contenteditable="true" spellcheck="false">'+esc(body)+'</div>'+
+    '<div class="email-edit-row"><input type="text" id="emailEditInput" placeholder="e.g. make it shorter..." onkeydown="if(event.key===\'Enter\')adjustEmail()"><button onclick="adjustEmail()" id="emailEditBtn">Adjust</button></div>'+
+    '<div class="email-loading" id="emailLoading">Rewriting...</div>'+
+    '<div class="email-actions"><button class="email-skip" onclick="closeEmail(false)">Skip Email</button><button class="email-send" onclick="closeEmail(true)">Send</button></div>';
+  $('emailOverlay').classList.add('visible');
+
+  // Store draft state -- profile is captured by closure, not idx
+  window._email={body,subject:job,profile,swipedIdx};
 }
+
 async function adjustEmail(){
-  const inp=document.getElementById('emailEditInput'),v=inp.value.trim();if(!v) return;
-  const btn=document.getElementById('emailEditBtn'),ld=document.getElementById('emailLoading');
-  btn.disabled=true;inp.disabled=true;ld.classList.add('visible');
-  try{const r=await(await fetch(BASE+'/adjust-email',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+API_KEY},body:JSON.stringify({current_body:window._cd.body,subject:window._cd.subject,instruction:v,profile_name:window._cd.profile.name,company:window._cd.profile.company,ai_signal:window._cd.profile.ai_signal})})).json();
-  if(r.body){window._cd.body=r.body;document.getElementById('emailBody').textContent=r.body}inp.value=''}catch(e){ld.textContent='Failed'}
-  btn.disabled=false;inp.disabled=false;setTimeout(()=>ld.classList.remove('visible'),1500);
+  const inp=$('emailEditInput'), v=inp.value.trim(); if(!v) return;
+  const btn=$('emailEditBtn'), ld=$('emailLoading');
+  btn.disabled=inp.disabled=true; ld.classList.add('visible'); ld.textContent='Rewriting...';
+  try{
+    const e=window._email;
+    const r=await(await fetch(BASE+'/adjust-email',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+API_KEY},body:JSON.stringify({current_body:$('emailBody').innerText,subject:e.subject,instruction:v,profile_name:e.profile.name,company:e.profile.company,ai_signal:e.profile.ai_signal})})).json();
+    if(r.body){window._email.body=r.body;$('emailBody').textContent=r.body}
+    inp.value='';
+  }catch(err){ld.textContent='Failed -- try again'}
+  btn.disabled=inp.disabled=false;
+  setTimeout(()=>ld.classList.remove('visible'),1500);
 }
-function dismissEmail(send){
+
+function closeEmail(send){
   if(send&&!inSendWindow()){alert('Emails only send 8am-7:30pm PST.');return}
-  document.getElementById('emailOverlay').classList.remove('visible');
-  recordSwipe('right');
-  setTimeout(()=>renderCards(),300);
+  $('emailOverlay').classList.remove('visible');
+  const e=window._email;
+  // NOW record the swipe and advance idx
+  lastIdx=e.swipedIdx; idx=e.swipedIdx+1;
+  api('/swipe',{tab:e.profile._tab,row:e.profile._row,direction:'right'});
+  setTimeout(render,300);
 }
 
 // ── Buttons ──
-document.getElementById('btnNope').addEventListener('click',()=>{if(!animating&&dragCard)swipeCard('left')});
-document.getElementById('btnLike').addEventListener('click',()=>{if(!animating&&dragCard)swipeCard('right')});
-document.getElementById('btnInfo').addEventListener('click',()=>{if(dragCard)dragCard.scrollTo({top:dragCard.querySelector('.card-hero').offsetHeight,behavior:'smooth'})});
-document.getElementById('btnUndo').addEventListener('click',async()=>{
-  if(lastSwipedIdx<0||animating) return;
-  animating=true;
-  const p=profiles[lastSwipedIdx];
-  fetch(BASE+'/undo',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+API_KEY},body:JSON.stringify({tab:p._tab,row:p._row})}).catch(()=>{});
-  idx=lastSwipedIdx;lastSwipedIdx=-1;renderCards();
-});
+
+$('btnNope').onclick=()=>doSwipe('left');
+$('btnLike').onclick=()=>doSwipe('right');
+$('btnUndo').onclick=()=>doUndo();
+$('btnInfo').onclick=()=>{const c=stackEl.querySelector('.card.top');if(c)c.scrollTo({top:c.querySelector('.card-hero').offsetHeight,behavior:'smooth'})};
+
 document.addEventListener('keydown',e=>{
-  if(document.getElementById('emailOverlay').classList.contains('visible')) return;
-  if(e.key==='ArrowLeft')document.getElementById('btnNope').click();
-  if(e.key==='ArrowRight')document.getElementById('btnLike').click();
-  if(e.key==='ArrowUp'||e.key==='ArrowDown')document.getElementById('btnInfo').click();
-  if(e.key==='z'&&(e.metaKey||e.ctrlKey))document.getElementById('btnUndo').click();
+  if($('emailOverlay').classList.contains('visible')) return;
+  if(e.key==='ArrowLeft') doSwipe('left');
+  if(e.key==='ArrowRight') doSwipe('right');
+  if(e.key==='ArrowUp'||e.key==='ArrowDown') $('btnInfo').click();
+  if(e.key==='z'&&(e.metaKey||e.ctrlKey)) doUndo();
 });
 
 loadProfiles();
