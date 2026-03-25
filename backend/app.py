@@ -774,19 +774,20 @@ def send_email(
 
     prompt = (
         f"Read the skill at ~/.claude/skills/ai-job-scrape-email-writer/SKILL.md.\n\n"
-        f"Send an email to this person following the skill's Step 1 (Apollo enrich) and Step 3 (send).\n\n"
+        f"Send an email to this person. Try ALL of these enrichment methods in order until you get an email:\n\n"
+        f'1. Apollo enrich by LinkedIn URL: --linkedin "{req.linkedin_url}" --output {contact_file}\n'
+        f'2. Apollo enrich by name+company: --first-name "{first_name}" --last-name "{last_name}" --company "{req.company or ""}" --output {contact_file}\n'
+        f"3. If both fail, guess the email pattern from the company domain. "
+        f"Look up the company domain, then try firstname@domain, first.last@domain, flast@domain.\n\n"
         f"LinkedIn URL: {req.linkedin_url}\n"
         f"Name: {req.name}\n"
         f"Company: {req.company or 'unknown'}\n\n"
-        f"IMPORTANT: Use --output {contact_file} for Apollo enrichment (unique file, do not use /tmp/contact.json).\n\n"
-        f"If Apollo enrichment fails by LinkedIn URL, try by name: "
-        f'--first-name "{first_name}" --last-name "{last_name}" --company "{req.company or ""}"\n\n'
         f"Use this EXACT email body (already approved by user):\n"
         f"Subject: {req.subject}\n"
         f"Body: {html_body}\n\n"
-        f"Do NOT modify the email body. Just enrich to get the email address, then send.\n"
+        f"Do NOT modify the email body. Just find the email address and send.\n"
         f"After sending, update Google Sheet {SHEET_ID} tab '{req.tab or 'Prospect Tracker'}' "
-        f"row {req.row or 'find by name'}: set Date Sent (col M) to today's date."
+        f"row {req.row or 'find by name'}: set Date Sent column to today's date."
     )
 
     try:
