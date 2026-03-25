@@ -555,12 +555,23 @@ async function adjustEmail(){
 }
 
 function closeEmail(send){
-  if(send&&!inSendWindow()){if(!confirm('Outside 8am-7:30pm PST. Schedule for next morning?'))return;}
   $('emailOverlay').classList.remove('visible');
   const e=window._email;
-  // NOW record the swipe and advance idx
   lastIdx=e.swipedIdx; idx=e.swipedIdx+1;
   api('/swipe',{tab:e.profile._tab,row:e.profile._row,direction:'right'});
+  if(send){
+    // Fire off the email via Claude Code + ai-job-scrape-email-writer skill
+    api('/send-email',{
+      linkedin_url:e.profile.linkedin_url,
+      name:e.profile.name,
+      company:e.profile.company,
+      ai_signal:e.profile.ai_signal,
+      subject:e.subject,
+      body:$('emailBody').innerText,
+      tab:e.profile._tab,
+      row:e.profile._row
+    });
+  }
   setTimeout(render,300);
 }
 
@@ -717,6 +728,79 @@ def adjust_email(
     except Exception as e:
         log.error(f"Email adjust failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to adjust email")
+
+
+class SendEmailRequest(BaseModel):
+    linkedin_url: str
+    name: str
+    company: Optional[str] = None
+    ai_signal: Optional[str] = None
+    subject: str
+    body: str
+    tab: Optional[str] = None
+    row: Optional[int] = None
+
+
+@app.post("/send-email")
+def send_email(
+    req: SendEmailRequest,
+    _auth: None = Depends(verify_api_key),
+):
+    """Enrich contact via Apollo, send email via Gmail, using ai-job-scrape-email-writer skill."""
+    html_body = req.body.replace("\n", "<br>")
+    first_name = req.name.split()[0] if req.name else ""
+    last_name = " ".join(req.name.split()[1:]) if req.name else ""
+
+    # Check send window -- if outside, schedule for 8am PST
+    from datetime import timezone, timedelta
+
+    pst = timezone(timedelta(hours=-7))
+    now_pst = datetime.now(pst)
+    in_window = 8 <= now_pst.hour < 19 or (now_pst.hour == 19 and now_pst.minute <= 30)
+    schedule_note = ""
+    if not in_window:
+        schedule_note = " (scheduled for 8am PST)"
+
+    prompt = (
+        f"Read the skill at ~/.claude/skills/ai-job-scrape-email-writer/SKILL.md.\n\n"
+        f"Send an email to this person following the skill's Step 1 (Apollo enrich) and Step 3 (send).\n\n"
+        f"LinkedIn URL: {req.linkedin_url}\n"
+        f"Name: {req.name}\n"
+        f"Company: {req.company or 'unknown'}\n\n"
+        f"If Apollo enrichment fails by LinkedIn URL, try by name: "
+        f'--first-name "{first_name}" --last-name "{last_name}" --company "{req.company or ""}"\n\n'
+        f"Use this EXACT email body (already approved by user):\n"
+        f"Subject: {req.subject}\n"
+        f"Body: {html_body}\n\n"
+        f"Do NOT modify the email body. Just enrich to get the email address, then send.\n"
+        f"After sending, update Google Sheet {SHEET_ID} tab '{req.tab or 'Prospect Tracker'}' "
+        f"row {req.row or 'find by name'}: set Date Sent (col M) to today's date."
+    )
+
+    try:
+        result = subprocess.Popen(
+            [
+                "/usr/local/bin/claude",
+                "--print",
+                "--allowedTools",
+                "Bash,Read",
+                "-p",
+                prompt,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        log.info(f"Email send started for {req.name} (pid {result.pid}){schedule_note}")
+        return {
+            "status": "sending",
+            "name": req.name,
+            "pid": result.pid,
+            "note": f"Enriching via Apollo and sending{schedule_note}",
+        }
+    except Exception as e:
+        log.error(f"Failed to start email send: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to start email send: {e}")
 
 
 # --- HeyReach integration ---------------------------------------------------
