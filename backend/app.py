@@ -1,12 +1,15 @@
 """
 Lead Swipe -- FastAPI backend + web app.
 
-Serves the swipe web app and API for reviewing lead profiles.
+Uses Google Sheets as the database via gws CLI.
 """
 
+import base64
+import hashlib
+import json
 import logging
 import os
-from datetime import datetime, timezone
+import subprocess
 from typing import List, Optional
 
 import requests
@@ -14,12 +17,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
-import secrets
-import hashlib
-import base64
 from pydantic import BaseModel
-from sqlalchemy import Column, DateTime, Integer, String, Text, create_engine
-from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 load_dotenv()
 
@@ -28,96 +26,164 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# --- Database ----------------------------------------------------------------
+# --- Config ------------------------------------------------------------------
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./linkedin_swipe.db")
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-engine = create_engine(DATABASE_URL, connect_args=connect_args)
-SessionLocal = sessionmaker(bind=engine)
-Base = declarative_base()
+SHEET_ID = os.getenv("SWIPE_SHEET_ID", "1JvQrDO8To0h8WFcPNrTFLS46jze2zeTAMNc8cjj11eI")
+# Tabs to read leads from, in priority order
+SHEET_TABS = ["Prospect Tracker", "OpenClaw iMac"]
 
+API_KEY = os.getenv("SWIPE_API_KEY", "")
+BASIC_USER = os.getenv("SWIPE_BASIC_USER", "calvin")
+BASIC_PASS = os.getenv("SWIPE_BASIC_PASS", "")
 
-class Profile(Base):
-    __tablename__ = "profiles"
-
-    id = Column(Integer, primary_key=True, index=True)
-    linkedin_url = Column(String, unique=True, nullable=False, index=True)
-    name = Column(String, nullable=False)
-    headline = Column(String)
-    company = Column(String)
-    location = Column(String)
-    photo_url = Column(String)
-    icp_score = Column(Integer, nullable=True)
-    employee_count = Column(String, nullable=True)
-    company_summary = Column(Text, nullable=True)
-    ai_signal = Column(String, nullable=True)
-    ai_signal_analysis = Column(Text, nullable=True)
-    why_trace_fits = Column(Text, nullable=True)
-    recommended_approach = Column(Text, nullable=True)
-    score_breakdown = Column(Text, nullable=True)
-    job_search_url = Column(String, nullable=True)
-    status = Column(String, default="pending", index=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    swiped_at = Column(DateTime, nullable=True)
+# --- Google Sheets helpers ---------------------------------------------------
 
 
-Base.metadata.create_all(bind=engine)
-
-# --- Pydantic schemas --------------------------------------------------------
-
-
-class ProfileCreate(BaseModel):
-    linkedin_url: str
-    name: str
-    headline: Optional[str] = None
-    company: Optional[str] = None
-    location: Optional[str] = None
-    photo_url: Optional[str] = None
-    icp_score: Optional[int] = None
-    employee_count: Optional[str] = None
-    company_summary: Optional[str] = None
-    ai_signal: Optional[str] = None
-    ai_signal_analysis: Optional[str] = None
-    why_trace_fits: Optional[str] = None
-    recommended_approach: Optional[str] = None
-    score_breakdown: Optional[str] = None
-    job_search_url: Optional[str] = None
+def _gws_read(tab: str, range_: str) -> dict:
+    """Read from a Google Sheet tab via gws CLI."""
+    full_range = f"'{tab}'!{range_}"
+    result = subprocess.run(
+        ["gws", "sheets", "+read", "--spreadsheet", SHEET_ID, "--range", full_range],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        log.error(f"gws read failed: {result.stderr}")
+        return {"values": []}
+    return json.loads(result.stdout)
 
 
-class ProfileResponse(BaseModel):
-    id: int
-    linkedin_url: str
-    name: str
-    headline: Optional[str]
-    company: Optional[str]
-    location: Optional[str]
-    photo_url: Optional[str]
-    icp_score: Optional[int]
-    employee_count: Optional[str]
-    company_summary: Optional[str]
-    ai_signal: Optional[str]
-    ai_signal_analysis: Optional[str]
-    why_trace_fits: Optional[str]
-    recommended_approach: Optional[str]
-    score_breakdown: Optional[str]
-    job_search_url: Optional[str]
-    status: str
-    created_at: datetime
+def _gws_update(tab: str, range_: str, values: list) -> bool:
+    """Update cells in a Google Sheet tab via gws CLI."""
+    params = json.dumps(
+        {
+            "spreadsheetId": SHEET_ID,
+            "range": f"'{tab}'!{range_}",
+            "valueInputOption": "USER_ENTERED",
+        }
+    )
+    body = json.dumps({"values": values})
+    result = subprocess.run(
+        [
+            "gws",
+            "sheets",
+            "spreadsheets",
+            "values",
+            "update",
+            "--params",
+            params,
+            "--json",
+            body,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        log.error(f"gws update failed: {result.stderr}")
+        return False
+    return True
 
-    class Config:
-        from_attributes = True
+
+def _read_tab_as_dicts(tab: str) -> tuple:
+    """Read a tab and return (headers, list_of_dicts, row_numbers).
+
+    Each dict maps header_name -> value. row_numbers are 1-indexed sheet rows.
+    """
+    data = _gws_read(tab, "A1:Z1000")
+    rows = data.get("values", [])
+    if len(rows) < 2:
+        return [], [], []
+    headers = rows[0]
+    results = []
+    row_numbers = []
+    for i, row in enumerate(rows[1:], start=2):
+        d = {}
+        for j, h in enumerate(headers):
+            d[h] = row[j] if j < len(row) else ""
+        d["_tab"] = tab
+        d["_row"] = i
+        results.append(d)
+        row_numbers.append(i)
+    return headers, results, row_numbers
 
 
-class SwipeAction(BaseModel):
-    profile_id: int
-    direction: str
+def _col_letter(headers: list, col_name: str) -> str:
+    """Get the spreadsheet column letter for a header name."""
+    try:
+        idx = headers.index(col_name)
+        return chr(65 + idx) if idx < 26 else chr(64 + idx // 26) + chr(65 + idx % 26)
+    except ValueError:
+        return None
 
 
-class StatsResponse(BaseModel):
-    total: int
-    pending: int
-    liked: int
-    skipped: int
+# --- Profile mapping ---------------------------------------------------------
+
+# Map from sheet column names to our internal profile format.
+# Both tabs have slightly different column names, so we try multiple.
+
+FIELD_MAP = {
+    "name": ["Leader Name"],
+    "company": ["Company"],
+    "headline": ["Title"],
+    "location": ["Location"],
+    "linkedin_url": ["Leader LinkedIn URL"],
+    "photo_url": ["LinkedIn Photo URL", "LinkedIn Image URL"],
+    "ai_signal": ["AI Job Signal"],
+    "job_search_url": ["Job Search URL"],
+    "icp_score": ["ICP Score"],
+    "employee_count": ["Employee Count"],
+    "company_summary": ["Company Summary"],
+    "ai_signal_analysis": ["AI Signal Analysis"],
+    "why_trace_fits": ["Why Trace Fits"],
+    "recommended_approach": ["Recommended Approach"],
+    "score_breakdown": ["Score Breakdown"],
+    "outreach_status": ["Outreach Status", "LinkedIn Status"],
+}
+
+
+def _map_row(row_dict: dict) -> dict:
+    """Map a sheet row dict to our profile format."""
+    profile = {"_tab": row_dict["_tab"], "_row": row_dict["_row"]}
+    for field, candidates in FIELD_MAP.items():
+        val = ""
+        for c in candidates:
+            if c in row_dict and row_dict[c]:
+                val = row_dict[c]
+                break
+        profile[field] = val
+    # Parse ICP score as int
+    try:
+        profile["icp_score"] = int(str(profile["icp_score"]).replace(",", ""))
+    except (ValueError, TypeError):
+        profile["icp_score"] = None
+    return profile
+
+
+# --- In-memory cache (refresh on load) --------------------------------------
+
+_cache = {"profiles": [], "headers_by_tab": {}}
+
+
+def _refresh_cache():
+    """Reload all profiles from both sheet tabs."""
+    all_profiles = []
+    for tab in SHEET_TABS:
+        headers, rows, _ = _read_tab_as_dicts(tab)
+        _cache["headers_by_tab"][tab] = headers
+        for row in rows:
+            p = _map_row(row)
+            # Skip rows with no name or no LinkedIn URL
+            if not p["name"] or p["name"] == "N/A":
+                continue
+            if not p["linkedin_url"] or "/search/results/" in p["linkedin_url"]:
+                continue
+            all_profiles.append(p)
+    _cache["profiles"] = all_profiles
+    log.info(
+        f"Cache refreshed: {len(all_profiles)} total profiles from {len(SHEET_TABS)} tabs"
+    )
 
 
 # --- App ---------------------------------------------------------------------
@@ -131,20 +197,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-API_KEY = os.getenv("SWIPE_API_KEY", "")
-BASIC_USER = os.getenv("SWIPE_BASIC_USER", "calvin")
-BASIC_PASS = os.getenv("SWIPE_BASIC_PASS", "")
-
 
 def check_basic_auth(request: Request):
-    """Return True if request has valid basic auth or session cookie."""
-    # Check session cookie first
     if (
         request.cookies.get("swipe_session")
         == hashlib.sha256((BASIC_PASS + API_KEY).encode()).hexdigest()[:32]
     ):
         return True
-    # Check basic auth header
     auth = request.headers.get("authorization", "")
     if auth.startswith("Basic "):
         try:
@@ -158,7 +217,6 @@ def check_basic_auth(request: Request):
 
 
 def verify_api_key(authorization: str = Header(None), key: str = Query(None)):
-    """Accept auth via header OR ?key= query param."""
     token = None
     if authorization and authorization.startswith("Bearer "):
         token = authorization.split(" ", 1)[1]
@@ -166,14 +224,6 @@ def verify_api_key(authorization: str = Header(None), key: str = Query(None)):
         token = key
     if not token or token != API_KEY:
         raise HTTPException(status_code=401, detail="Unauthorized")
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 # --- Web App (served as HTML) -----------------------------------------------
@@ -201,14 +251,14 @@ def root(request: Request):
 
 @app.get("/app", response_class=HTMLResponse)
 def serve_app(request: Request, key: str = Query("")):
-    """Serve the swipe web app. Auth via ?key= or basic auth."""
     if key != API_KEY:
         if BASIC_PASS and check_basic_auth(request):
             return RedirectResponse(url="/app?key=" + API_KEY)
         return HTMLResponse("<h1>Invalid key</h1>", status_code=401)
-
     return HTMLResponse(WEB_APP_HTML.replace("__API_KEY__", key))
 
+
+# --- (HTML inserted below, then API endpoints) ---
 
 WEB_APP_HTML = r"""<!DOCTYPE html>
 <html lang="en">
@@ -225,13 +275,9 @@ WEB_APP_HTML = r"""<!DOCTYPE html>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none}
 html,body{height:100%;overflow:hidden}
 body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;color:#fff;display:flex;flex-direction:column}
-
-/* ── Top bar ── */
 .topbar{height:52px;display:flex;align-items:center;justify-content:center;flex-shrink:0;position:relative;z-index:10}
 .topbar .logo{font-size:24px;font-weight:800;background:linear-gradient(135deg,#fd267a,#ff6036);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
 .topbar .counter{position:absolute;right:16px;font-size:12px;color:rgba(255,255,255,0.35);font-weight:600}
-
-/* ── Card stack ── */
 .stack{flex:1;position:relative;display:flex;align-items:center;justify-content:center;padding:8px;overflow:hidden}
 .card{position:absolute;width:calc(100% - 16px);max-width:420px;height:calc(100% - 8px);border-radius:12px;overflow-y:auto;overflow-x:hidden;background:#222;box-shadow:0 4px 24px rgba(0,0,0,0.5);transform-origin:50% 80%;will-change:transform;cursor:grab;touch-action:pan-y;-webkit-overflow-scrolling:touch;scroll-snap-type:y proximity}
 .card:active{cursor:grabbing}
@@ -239,21 +285,13 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 .card.top{z-index:2}
 .card.exit-left{transition:transform 0.4s ease-out,opacity 0.4s;transform:translateX(-150%) rotate(-20deg)!important;opacity:0;pointer-events:none}
 .card.exit-right{transition:transform 0.4s ease-out,opacity 0.4s;transform:translateX(150%) rotate(20deg)!important;opacity:0;pointer-events:none}
-
-/* Photo section -- takes full card height as first "page" */
 .card-hero{position:relative;width:100%;height:100%;flex-shrink:0;scroll-snap-align:start}
 .card-photo{position:absolute;inset:0;background-size:cover;background-position:center top;background-color:#2a2a2a}
 .card-photo .initials{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:72px;font-weight:800;color:rgba(255,255,255,0.15)}
-
-/* Gradient overlay */
 .card-gradient{position:absolute;bottom:0;left:0;right:0;height:55%;background:linear-gradient(to top,rgba(0,0,0,0.85) 0%,rgba(0,0,0,0.5) 40%,transparent 100%);pointer-events:none}
-
-/* NOPE / LIKE stamps */
 .stamp{position:absolute;top:60px;padding:8px 16px;border:4px solid;border-radius:8px;font-size:36px;font-weight:800;letter-spacing:3px;opacity:0;transform:scale(0.8);pointer-events:none;z-index:5}
 .stamp-nope{left:20px;border-color:#fe3c72;color:#fe3c72;transform:rotate(-15deg) scale(0.8)}
 .stamp-like{right:20px;border-color:#2DF88A;color:#2DF88A;transform:rotate(15deg) scale(0.8)}
-
-/* Card info overlay on photo */
 .card-info{position:absolute;bottom:0;left:0;right:0;padding:20px 20px 24px;z-index:3}
 .card-name{font-size:28px;font-weight:700;line-height:1.1;text-shadow:0 2px 8px rgba(0,0,0,0.5)}
 .card-name .icp{font-size:16px;font-weight:600;margin-left:8px;padding:2px 8px;border-radius:20px;vertical-align:middle}
@@ -264,8 +302,6 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 .card-company{font-size:14px;color:rgba(255,255,255,0.6);margin-top:2px;font-weight:600}
 .card-meta{font-size:13px;color:rgba(255,255,255,0.45);margin-top:4px}
 .scroll-hint{text-align:center;margin-top:10px;font-size:11px;color:rgba(255,255,255,0.3);letter-spacing:1px}
-
-/* Below-photo detail area (scroll down to see) */
 .card-below{padding:24px 20px 40px;background:#1a1a1a}
 .detail-section{margin-bottom:20px}
 .detail-label{font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,255,255,0.4);margin-bottom:6px}
@@ -275,8 +311,6 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 .detail-links a:active{opacity:0.6}
 .link-li{background:rgba(255,255,255,0.15);color:#fff}
 .link-job{background:rgba(45,248,138,0.15);color:#2DF88A}
-
-/* ── Email draft modal ── */
 .email-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:100;align-items:center;justify-content:center;padding:16px}
 .email-overlay.visible{display:flex}
 .email-card{background:#1a1a1a;border-radius:16px;width:100%;max-width:420px;max-height:80vh;overflow-y:auto;padding:28px 24px}
@@ -297,8 +331,6 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 .email-actions button{flex:1;padding:14px;border:none;border-radius:24px;font-size:15px;font-weight:700;cursor:pointer}
 .email-send{background:linear-gradient(135deg,#2DF88A,#21d07a);color:#000}
 .email-skip{background:rgba(255,255,255,0.1);color:rgba(255,255,255,0.7)}
-
-/* ── Action buttons ── */
 .actions{height:90px;display:flex;align-items:center;justify-content:center;gap:24px;flex-shrink:0;z-index:10}
 .action-btn{width:60px;height:60px;border-radius:50%;border:2px solid;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s;background:transparent}
 .action-btn:active{transform:scale(0.9)}
@@ -309,8 +341,6 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 .btn-info svg{width:20px;height:20px;fill:#21a0ff}
 .btn-like{border-color:#2DF88A}
 .btn-like svg{width:28px;height:28px;fill:#2DF88A}
-
-/* ── Empty state ── */
 .empty{display:none;flex:1;flex-direction:column;align-items:center;justify-content:center;padding:40px;text-align:center}
 .empty.visible{display:flex}
 .empty h2{font-size:24px;font-weight:700;color:rgba(255,255,255,0.7)}
@@ -319,39 +349,22 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 </style>
 </head>
 <body>
-
 <div class="topbar">
   <div class="logo">lead swipe</div>
-  <div class="counter" id="counter"></div>
+  <span class="counter" id="counter"></span>
 </div>
-
 <div class="stack" id="stack"></div>
-
 <div class="actions" id="actions">
-  <div class="action-btn btn-nope" id="btnNope">
-    <svg viewBox="0 0 24 24"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg>
-  </div>
-  <div class="action-btn btn-info" id="btnInfo">
-    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="#21a0ff" stroke-width="2"/><line x1="12" y1="16" x2="12" y2="12" stroke="#21a0ff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="8" r="1"/></svg>
-  </div>
-  <div class="action-btn btn-like" id="btnLike">
-    <svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 0 0 0-7.78z"/></svg>
-  </div>
+  <div class="action-btn btn-nope" id="btnNope"><svg viewBox="0 0 24 24"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg></div>
+  <div class="action-btn btn-info" id="btnInfo"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="#21a0ff" stroke-width="2"/><line x1="12" y1="16" x2="12" y2="12" stroke="#21a0ff" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="8" r="1"/></svg></div>
+  <div class="action-btn btn-like" id="btnLike"><svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78L12 21.23l8.84-8.84a5.5 5.5 0 0 0 0-7.78z"/></svg></div>
 </div>
-
-<div class="email-overlay" id="emailOverlay">
-  <div class="email-card" id="emailCard"></div>
-</div>
-
-<div class="empty" id="emptyState">
-  <h2>No more leads</h2>
-  <p>You've reviewed everyone</p>
-  <button onclick="loadProfiles()">Refresh</button>
-</div>
+<div class="email-overlay" id="emailOverlay"><div class="email-card" id="emailCard"></div></div>
+<div class="empty" id="emptyState"><h2>No more leads</h2><p>You've reviewed everyone</p><button onclick="loadProfiles()">Refresh</button></div>
 
 <script>
 const API_KEY='__API_KEY__',BASE=window.location.origin,K='?key='+API_KEY;
-let profiles=[],idx=0,busy=false,dragCard=null,startX=0,startY=0,currentX=0,detailOpen=false;
+let profiles=[],idx=0,busy=false,dragCard=null,startX=0,startY=0,currentX=0;
 
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
 function initials(n){return n.split(' ').map(w=>w[0]).filter(Boolean).slice(0,2).join('').toUpperCase()}
@@ -377,7 +390,6 @@ function renderCards(){
     document.getElementById('counter').textContent='';
     return;
   }
-  // Render up to 2 cards (current + next behind)
   for(let i=Math.min(idx+1,profiles.length-1);i>=idx;i--){
     stack.appendChild(createCard(profiles[i],i===idx));
   }
@@ -388,7 +400,6 @@ function renderCards(){
 function createCard(p,isTop){
   const card=document.createElement('div');
   card.className='card '+(isTop?'top':'behind');
-  card.dataset.id=p.id;
 
   let photoStyle='';
   if(p.photo_url){
@@ -405,7 +416,6 @@ function createCard(p,isTop){
   let icpHtml='';
   if(p.icp_score!=null&&p.icp_score<=100) icpHtml='<span class="icp '+icpCls(p.icp_score)+'">'+p.icp_score+'</span>';
 
-  // Below-photo detail sections
   let below='';
   if(p.company_summary) below+='<div class="detail-section"><div class="detail-label">Company</div><div class="detail-text">'+esc(p.company_summary)+'</div></div>';
   if(p.ai_signal){
@@ -439,50 +449,42 @@ function createCard(p,isTop){
 }
 
 // ── Drag / swipe ──
+let dragging=false;
 function setupDrag(){
   const card=document.querySelector('.card.top');
   if(!card) return;
   dragCard=card;
   card.addEventListener('pointerdown',onStart,{passive:false});
 }
-
-let dragging=false;
 function onStart(e){
   if(e.target.closest('.detail-links,.card-below a')) return;
   startX=e.clientX;startY=e.clientY;currentX=0;dragging=false;
   document.addEventListener('pointermove',onMove);
   document.addEventListener('pointerup',onEnd);
 }
-
 function onMove(e){
   const dx=e.clientX-startX,dy=e.clientY-startY;
-  // Only start horizontal drag if at scroll top and mostly horizontal movement
   if(!dragging){
     if(Math.abs(dx)>10&&Math.abs(dx)>Math.abs(dy)&&dragCard.scrollTop<10){
       dragging=true;dragCard.setPointerCapture(e.pointerId);dragCard.style.transition='none';dragCard.style.overflow='hidden';
     }else return;
   }
   currentX=dx;
-  const rotate=currentX*0.08;
-  dragCard.style.transform='translateX('+currentX+'px) rotate('+rotate+'deg)';
-  const nope=dragCard.querySelector('.stamp-nope');
-  const like=dragCard.querySelector('.stamp-like');
+  dragCard.style.transform='translateX('+currentX+'px) rotate('+(currentX*0.08)+'deg)';
+  const nope=dragCard.querySelector('.stamp-nope'),like=dragCard.querySelector('.stamp-like');
   const t=Math.min(Math.abs(currentX)/120,1);
   if(currentX<-20){nope.style.opacity=t;nope.style.transform='rotate(-15deg) scale('+(0.8+t*0.2)+')';like.style.opacity=0}
   else if(currentX>20){like.style.opacity=t;like.style.transform='rotate(15deg) scale('+(0.8+t*0.2)+')';nope.style.opacity=0}
   else{nope.style.opacity=0;like.style.opacity=0}
 }
-
 function onEnd(){
   document.removeEventListener('pointermove',onMove);
   document.removeEventListener('pointerup',onEnd);
   if(!dragging) return;
   dragCard.style.overflow='';
-  if(Math.abs(currentX)>100){
-    animateOut(currentX>0?'right':'left');
-  }else{
-    dragCard.style.transition='transform 0.3s ease-out';
-    dragCard.style.transform='';
+  if(Math.abs(currentX)>100) animateOut(currentX>0?'right':'left');
+  else{
+    dragCard.style.transition='transform 0.3s ease-out';dragCard.style.transform='';
     dragCard.querySelector('.stamp-nope').style.opacity=0;
     dragCard.querySelector('.stamp-like').style.opacity=0;
   }
@@ -490,18 +492,12 @@ function onEnd(){
 }
 
 function animateOut(dir){
-  const card=dragCard;
-  card.classList.add(dir==='left'?'exit-left':'exit-right');
-  if(dir==='left'){
-    doSwipe('left');
-    setTimeout(()=>renderCards(),400);
-  }else{
-    // Right swipe: show email draft
-    showEmailDraft(profiles[idx]);
-  }
+  dragCard.classList.add(dir==='left'?'exit-left':'exit-right');
+  if(dir==='left'){doSwipe('left');setTimeout(()=>renderCards(),400)}
+  else showEmailDraft(profiles[idx]);
 }
 
-// Email draft templates (rotate for same-company variety)
+// ── Email draft ──
 const EMAIL_TEMPLATES=[
   (n,job,co)=>'Hi '+n+',\n\nI graduated from Harvard and have been deeply involved in AI since December \'22. I came across the '+job+' role on LinkedIn and would love to ask a few questions about the position and learn more about what '+co+' has planned on the AI front.\n\nHave a great day!\n\nBest,\nCalvin',
   (n,job,co)=>'Hi '+n+',\n\nI\'m a recent Harvard grad and have been working in the AI space since December \'22. I came across the '+job+' role on LinkedIn and would love to learn more about the position and what '+co+' has planned on the AI front.\n\nHave a great day!\n\nBest,\nCalvin',
@@ -515,12 +511,11 @@ function showEmailDraft(p){
   const co=p.company||'your company';
   const body=EMAIL_TEMPLATES[templateIdx%EMAIL_TEMPLATES.length](firstName,job,co);
   templateIdx++;
-  const subject=p.ai_signal||'AI Role';
 
   document.getElementById('emailCard').innerHTML=
     '<h3>Draft Email</h3>'+
     '<div class="email-to">To: '+esc(firstName)+' (enrich via Apollo for email)</div>'+
-    '<div class="email-subject">Subject: '+esc(subject)+'</div>'+
+    '<div class="email-subject">Subject: '+esc(job)+'</div>'+
     '<div class="email-body" id="emailBody">'+esc(body)+'</div>'+
     '<div class="email-edit-row">'+
       '<input type="text" id="emailEditInput" placeholder="e.g. make it shorter, mention their CTO role..." onkeydown="if(event.key===\'Enter\')adjustEmail()">'+
@@ -532,8 +527,7 @@ function showEmailDraft(p){
       '<button class="email-send" onclick="dismissEmail(true)">Send</button>'+
     '</div>';
   document.getElementById('emailOverlay').classList.add('visible');
-  // Store current draft for adjustment
-  window._currentDraft={body:body,subject:subject,profile:p};
+  window._currentDraft={body:body,subject:job,profile:p};
 }
 
 async function adjustEmail(){
@@ -548,35 +542,18 @@ async function adjustEmail(){
     const r=await fetch(BASE+'/adjust-email',{
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+API_KEY},
-      body:JSON.stringify({
-        current_body:window._currentDraft.body,
-        subject:window._currentDraft.subject,
-        instruction:instruction,
-        profile_name:window._currentDraft.profile.name,
-        company:window._currentDraft.profile.company,
-        ai_signal:window._currentDraft.profile.ai_signal
-      })
+      body:JSON.stringify({current_body:window._currentDraft.body,subject:window._currentDraft.subject,instruction:instruction,profile_name:window._currentDraft.profile.name,company:window._currentDraft.profile.company,ai_signal:window._currentDraft.profile.ai_signal})
     });
     const data=await r.json();
-    if(data.body){
-      window._currentDraft.body=data.body;
-      document.getElementById('emailBody').textContent=data.body;
-      if(data.subject) window._currentDraft.subject=data.subject;
-    }
+    if(data.body){window._currentDraft.body=data.body;document.getElementById('emailBody').textContent=data.body;if(data.subject) window._currentDraft.subject=data.subject}
     input.value='';
-  }catch(e){
-    loading.textContent='Failed -- try again';
-  }
+  }catch(e){loading.textContent='Failed -- try again'}
   btn.disabled=false;input.disabled=false;
   setTimeout(()=>loading.classList.remove('visible'),1500);
 }
 
 function dismissEmail(send){
   document.getElementById('emailOverlay').classList.remove('visible');
-  if(send){
-    // TODO: trigger actual send via backend -> ai-job-scrape-email-writer
-    console.log('Would send email for profile',profiles[idx].id);
-  }
   doSwipe('right');
   setTimeout(()=>renderCards(),300);
 }
@@ -584,12 +561,12 @@ function dismissEmail(send){
 async function doSwipe(direction){
   if(busy||idx>=profiles.length) return;
   busy=true;
-  const pid=profiles[idx].id;
+  const p=profiles[idx];
   try{
     await fetch(BASE+'/swipe',{
       method:'POST',
       headers:{'Content-Type':'application/json','Authorization':'Bearer '+API_KEY},
-      body:JSON.stringify({profile_id:pid,direction:direction==='right'?'right':'left'})
+      body:JSON.stringify({tab:p._tab,row:p._row,direction:direction==='right'?'right':'left'})
     });
   }catch(e){}
   idx++;busy=false;
@@ -598,23 +575,19 @@ async function doSwipe(direction){
 // Button triggers
 document.getElementById('btnNope').addEventListener('click',()=>{
   if(!dragCard||busy) return;
-  dragCard.classList.add('exit-left');
-  doSwipe('left');
-  setTimeout(()=>renderCards(),400);
+  dragCard.classList.add('exit-left');doSwipe('left');setTimeout(()=>renderCards(),400);
 });
 document.getElementById('btnLike').addEventListener('click',()=>{
   if(!dragCard||busy) return;
   dragCard.querySelector('.stamp-like').style.opacity=1;
   dragCard.querySelector('.stamp-like').style.transform='rotate(15deg) scale(1)';
-  dragCard.classList.add('exit-right');
-  showEmailDraft(profiles[idx]);
+  dragCard.classList.add('exit-right');showEmailDraft(profiles[idx]);
 });
 document.getElementById('btnInfo').addEventListener('click',()=>{
   if(!dragCard) return;
   dragCard.scrollTo({top:dragCard.querySelector('.card-hero').offsetHeight,behavior:'smooth'});
 });
 
-// Keyboard
 document.addEventListener('keydown',e=>{
   if(document.getElementById('emailOverlay').classList.contains('visible')) return;
   if(e.key==='ArrowLeft')document.getElementById('btnNope').click();
@@ -628,22 +601,72 @@ loadProfiles();
 </html>"""
 
 
-# --- API endpoints -----------------------------------------------------------
+# --- API endpoints (Google Sheets backed) ------------------------------------
 
 
-@app.get("/profiles", response_model=List[ProfileResponse])
+@app.get("/profiles")
 def get_pending_profiles(
-    limit: int = 50,
-    db: Session = Depends(get_db),
+    limit: int = 200,
     _auth: None = Depends(verify_api_key),
 ):
-    return (
-        db.query(Profile)
-        .filter(Profile.status == "pending")
-        .order_by(Profile.icp_score.desc().nullslast(), Profile.created_at.desc())
-        .limit(limit)
-        .all()
+    """Return profiles that haven't been swiped yet (no Outreach Status)."""
+    _refresh_cache()
+    pending = [p for p in _cache["profiles"] if not p["outreach_status"]]
+    # Sort by ICP score descending (nulls last)
+    pending.sort(
+        key=lambda p: (p["icp_score"] is not None, p["icp_score"] or 0), reverse=True
     )
+    return pending[:limit]
+
+
+class SwipeRequest(BaseModel):
+    tab: str
+    row: int
+    direction: str
+
+
+@app.post("/swipe")
+def record_swipe(
+    swipe: SwipeRequest,
+    _auth: None = Depends(verify_api_key),
+):
+    """Write swipe result to the Outreach Status column in the sheet."""
+    tab = swipe.tab
+    row = swipe.row
+    headers = _cache["headers_by_tab"].get(tab)
+    if not headers:
+        raise HTTPException(status_code=400, detail=f"Unknown tab: {tab}")
+
+    # Find the outreach status column dynamically
+    status_col = _col_letter(headers, "Outreach Status") or _col_letter(
+        headers, "LinkedIn Status"
+    )
+    if not status_col:
+        raise HTTPException(status_code=500, detail="No status column found in sheet")
+
+    status_value = "Liked" if swipe.direction == "right" else "Skipped"
+    ok = _gws_update(tab, f"{status_col}{row}", [[status_value]])
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to update sheet")
+
+    return {"status": "ok", "tab": tab, "row": row, "direction": swipe.direction}
+
+
+@app.get("/stats")
+def get_stats(_auth: None = Depends(verify_api_key)):
+    if not _cache["profiles"]:
+        _refresh_cache()
+    total = len(_cache["profiles"])
+    pending = sum(1 for p in _cache["profiles"] if not p["outreach_status"])
+    liked = sum(
+        1
+        for p in _cache["profiles"]
+        if p["outreach_status"].lower() in ("liked", "connected")
+    )
+    skipped = sum(
+        1 for p in _cache["profiles"] if p["outreach_status"].lower() == "skipped"
+    )
+    return {"total": total, "pending": pending, "liked": liked, "skipped": skipped}
 
 
 class EmailAdjustRequest(BaseModel):
@@ -660,9 +683,7 @@ def adjust_email(
     req: EmailAdjustRequest,
     _auth: None = Depends(verify_api_key),
 ):
-    """Use Claude API to adjust the email draft based on user instruction."""
-    import subprocess
-
+    """Use Claude CLI to adjust the email draft based on user instruction."""
     prompt = (
         f"You are rewriting a cold outreach email. The current draft is:\n\n"
         f"Subject: {req.subject}\n\n{req.current_body}\n\n"
@@ -688,128 +709,15 @@ def adjust_email(
         raise HTTPException(status_code=500, detail="Failed to adjust email")
 
 
-@app.post("/profiles", status_code=201)
-def upload_profiles(
-    profiles: List[ProfileCreate],
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_api_key),
-):
-    created = 0
-    duplicates = 0
-    for p in profiles:
-        existing = (
-            db.query(Profile).filter(Profile.linkedin_url == p.linkedin_url).first()
-        )
-        if existing:
-            duplicates += 1
-            continue
-        db.add(Profile(**p.model_dump()))
-        created += 1
-    db.commit()
-    log.info(f"Uploaded {created} new profiles ({duplicates} duplicates)")
-    return {"created": created, "duplicates": duplicates}
-
-
-@app.post("/swipe")
-def record_swipe(
-    swipe: SwipeAction,
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_api_key),
-):
-    profile = db.query(Profile).filter(Profile.id == swipe.profile_id).first()
-    if not profile:
-        raise HTTPException(status_code=404, detail="Profile not found")
-    if swipe.direction not in ("right", "left"):
-        raise HTTPException(
-            status_code=400, detail="direction must be 'right' or 'left'"
-        )
-    if swipe.direction == "right":
-        profile.status = "liked"
-        heyreach_ok = _add_to_heyreach(profile)
-        if not heyreach_ok:
-            log.warning(f"HeyReach push failed for {profile.linkedin_url}")
-    else:
-        profile.status = "skipped"
-    profile.swiped_at = datetime.now(timezone.utc)
-    db.commit()
-    return {
-        "status": "ok",
-        "profile_id": profile.id,
-        "direction": swipe.direction,
-        "heyreach": swipe.direction == "right",
-    }
-
-
-@app.get("/liked", response_model=List[ProfileResponse])
-def get_liked_profiles(
-    limit: int = 200,
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_api_key),
-):
-    return (
-        db.query(Profile)
-        .filter(Profile.status == "liked")
-        .order_by(Profile.swiped_at.desc())
-        .limit(limit)
-        .all()
-    )
-
-
-@app.patch("/profiles/{profile_id}")
-def update_profile(
-    profile_id: int,
-    updates: dict,
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_api_key),
-):
-    """Update a profile (used for photo enrichment)."""
-    profile = db.query(Profile).filter(Profile.id == profile_id).first()
-    if not profile:
-        raise HTTPException(status_code=404, detail="Profile not found")
-    for key in (
-        "photo_url",
-        "headline",
-        "company",
-        "location",
-        "linkedin_url",
-        "icp_score",
-        "employee_count",
-        "company_summary",
-        "ai_signal",
-        "ai_signal_analysis",
-        "why_trace_fits",
-        "recommended_approach",
-        "score_breakdown",
-        "job_search_url",
-    ):
-        if key in updates:
-            setattr(profile, key, updates[key])
-    db.commit()
-    return {"status": "ok", "profile_id": profile_id}
-
-
-@app.get("/stats", response_model=StatsResponse)
-def get_stats(
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_api_key),
-):
-    total = db.query(Profile).count()
-    pending = db.query(Profile).filter(Profile.status == "pending").count()
-    liked = db.query(Profile).filter(Profile.status == "liked").count()
-    skipped = db.query(Profile).filter(Profile.status == "skipped").count()
-    return {"total": total, "pending": pending, "liked": liked, "skipped": skipped}
-
-
 # --- HeyReach integration ---------------------------------------------------
 
 HEYREACH_BASE = "https://api.heyreach.io/api/public"
 
 
-def _add_to_heyreach(profile: Profile) -> bool:
+def _add_to_heyreach(name: str, linkedin_url: str, company: str, headline: str) -> bool:
     api_key = os.getenv("HEYREACH_API_KEY", "")
     campaign_id = os.getenv("HEYREACH_SWIPE_CAMPAIGN_ID", "")
     if not api_key or not campaign_id:
-        log.warning("HeyReach not configured (missing API key or campaign ID)")
         return False
     headers = {
         "X-API-KEY": api_key,
@@ -829,17 +737,14 @@ def _add_to_heyreach(profile: Profile) -> bool:
         return False
     account_ids = campaign.get("campaignAccountIds", [])
     if not account_ids:
-        log.error(f"Campaign {campaign_id} has no linked LinkedIn accounts")
         return False
-    parts = profile.name.split(" ", 1)
-    first_name = parts[0] if parts else ""
-    last_name = parts[1] if len(parts) > 1 else ""
+    parts = name.split(" ", 1)
     lead = {
-        "profileUrl": profile.linkedin_url,
-        "firstName": first_name,
-        "lastName": last_name,
-        "companyName": profile.company or "",
-        "position": profile.headline or "",
+        "profileUrl": linkedin_url,
+        "firstName": parts[0] if parts else "",
+        "lastName": parts[1] if len(parts) > 1 else "",
+        "companyName": company,
+        "position": headline,
         "emailAddress": "",
     }
     body = {
@@ -854,7 +759,6 @@ def _add_to_heyreach(profile: Profile) -> bool:
             timeout=30,
         )
         resp.raise_for_status()
-        log.info(f"Added {profile.linkedin_url} to HeyReach campaign {campaign_id}")
         return True
     except Exception as e:
         log.error(f"HeyReach AddLeads failed: {e}")
