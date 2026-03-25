@@ -518,14 +518,15 @@ const TEMPLATES=[
   (n,j,c)=>'Hi '+n+',\n\nI graduated from Harvard and have been deeply involved in AI since December \'22. I came across the '+j+' role on LinkedIn and would love to ask a few questions about the position and learn more about what '+c+' has planned on the AI front.\n\nHave a great day!\n\nBest,\nCalvin',
   (n,j,c)=>'Hi '+n+',\n\nI\'m a recent Harvard grad and have been working in the AI space since December \'22. I came across the '+j+' role on LinkedIn and would love to learn more about the position and what '+c+' has planned on the AI front.\n\nHave a great day!\n\nBest,\nCalvin',
   (n,j,c)=>'Hi '+n+',\n\nI graduated from Harvard and have been deeply involved in AI since December \'22. I came across the '+j+' role on LinkedIn and would love to ask a few questions about the position and learn more about what '+c+' has planned on the agents front.\n\nHave a great day!\n\nBest,\nCalvin',
+  (n,j,c)=>'Hi '+n+',\n\nI graduated from Harvard last year and have been deep in the AI space since December \'22. I came across the '+j+' role with the need for them to specifically be AI native on LinkedIn. I would love to ask a few questions about the position and learn more about what '+c+' has planned on the agents front.\n\nHave a great day!\n\nBest,\nCalvin',
 ];
-let tplIdx=0;
+let tplIdx=parseInt(localStorage.getItem('tplIdx')||'0');
 
 function showEmail(profile, swipedIdx){
   const fn=(profile.name||'').split(' ')[0];
   const job=profile.ai_signal||'AI';
   const co=profile.company||'your company';
-  const body=TEMPLATES[tplIdx++%TEMPLATES.length](fn,job,co);
+  const body=TEMPLATES[tplIdx%TEMPLATES.length](fn,job,co);tplIdx++;localStorage.setItem('tplIdx',tplIdx);
 
   $('emailCard').innerHTML=
     '<h3>Draft Email</h3>'+
