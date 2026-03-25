@@ -716,11 +716,21 @@ def adjust_email(
         f"no markdown. Keep the same signature (Best, Calvin). Keep it concise."
     )
     try:
+        env = os.environ.copy()
+        env["PATH"] = "/usr/local/bin:/usr/bin:/bin"
+        config_env = os.path.expanduser("~/BridgeIntelligence/GTM/config.env")
+        if os.path.exists(config_env):
+            with open(config_env) as f:
+                for line in f:
+                    if "=" in line and not line.startswith("#"):
+                        k, v = line.strip().split("=", 1)
+                        env[k] = v
         result = subprocess.run(
-            ["claude", "--print", "-p", prompt],
+            ["/usr/local/bin/claude", "--print", "-p", prompt],
             capture_output=True,
             text=True,
             timeout=30,
+            env=env,
         )
         new_body = result.stdout.strip()
         if not new_body:
@@ -782,6 +792,17 @@ def send_email(
     )
 
     try:
+        env = os.environ.copy()
+        env["PATH"] = "/usr/local/bin:/usr/bin:/bin"
+        # Load API key from config.env if not already set
+        config_env = os.path.expanduser("~/BridgeIntelligence/GTM/config.env")
+        if os.path.exists(config_env):
+            with open(config_env) as f:
+                for line in f:
+                    if "=" in line and not line.startswith("#"):
+                        k, v = line.strip().split("=", 1)
+                        env[k] = v
+
         result = subprocess.Popen(
             [
                 "/usr/local/bin/claude",
@@ -793,6 +814,7 @@ def send_email(
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=env,
             text=True,
         )
         log.info(f"Email send started for {req.name} (pid {result.pid}){schedule_note}")
