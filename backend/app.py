@@ -334,7 +334,8 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 .email-card h3{font-size:18px;font-weight:700;color:#2DF88A;margin-bottom:4px}
 .email-card .email-to{font-size:13px;color:rgba(255,255,255,0.5);margin-bottom:16px}
 .email-card .email-subject{font-size:15px;font-weight:600;color:rgba(255,255,255,0.85);margin-bottom:12px}
-.email-card .email-body{font-size:14px;color:rgba(255,255,255,0.75);line-height:1.6;white-space:pre-wrap}
+.email-card .email-body{font-size:14px;color:rgba(255,255,255,0.75);line-height:1.6;white-space:pre-wrap;cursor:text;border-radius:8px;padding:12px;margin:-12px;transition:background 0.15s}
+.email-card .email-body:focus{outline:none;background:rgba(255,255,255,0.06)}
 .email-edit-row{display:flex;gap:8px;margin-top:16px}
 .email-edit-row input{flex:1;padding:12px 14px;border:1px solid rgba(255,255,255,0.15);border-radius:20px;background:rgba(255,255,255,0.08);color:#fff;font-size:14px;font-family:inherit;outline:none}
 .email-edit-row input::placeholder{color:rgba(255,255,255,0.3)}
@@ -533,7 +534,7 @@ function showEmailDraft(p){
     '<h3>Draft Email</h3>'+
     '<div class="email-to">To: '+esc(firstName)+' (enrich via Apollo for email)</div>'+
     '<div class="email-subject">Subject: '+esc(job)+'</div>'+
-    '<div class="email-body" id="emailBody">'+esc(body)+'</div>'+
+    '<div class="email-body" id="emailBody" contenteditable="true" spellcheck="false" oninput="window._currentDraft.body=this.innerText">'+esc(body)+'</div>'+
     '<div class="email-edit-row">'+
       '<input type="text" id="emailEditInput" placeholder="e.g. make it shorter, mention their CTO role..." onkeydown="if(event.key===\'Enter\')adjustEmail()">'+
       '<button onclick="adjustEmail()" id="emailEditBtn">Adjust</button>'+
