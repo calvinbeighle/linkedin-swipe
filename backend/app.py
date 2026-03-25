@@ -1,7 +1,7 @@
 """
-LinkedIn Swipe -- FastAPI backend + web app.
+Lead Swipe -- FastAPI backend + web app.
 
-Serves the swipe web app and API for reviewing LinkedIn profiles.
+Serves the swipe web app and API for reviewing lead profiles.
 """
 
 import logging
@@ -13,9 +13,9 @@ import requests
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import Column, DateTime, Integer, String, create_engine
+from sqlalchemy import Column, DateTime, Integer, String, Text, create_engine
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 load_dotenv()
@@ -27,8 +27,9 @@ log = logging.getLogger(__name__)
 
 # --- Database ----------------------------------------------------------------
 
-DATABASE_URL = "sqlite:///./linkedin_swipe.db"
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./linkedin_swipe.db")
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
 
@@ -43,6 +44,15 @@ class Profile(Base):
     company = Column(String)
     location = Column(String)
     photo_url = Column(String)
+    icp_score = Column(Integer, nullable=True)
+    employee_count = Column(String, nullable=True)
+    company_summary = Column(Text, nullable=True)
+    ai_signal = Column(String, nullable=True)
+    ai_signal_analysis = Column(Text, nullable=True)
+    why_trace_fits = Column(Text, nullable=True)
+    recommended_approach = Column(Text, nullable=True)
+    score_breakdown = Column(Text, nullable=True)
+    job_search_url = Column(String, nullable=True)
     status = Column(String, default="pending", index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     swiped_at = Column(DateTime, nullable=True)
@@ -60,6 +70,15 @@ class ProfileCreate(BaseModel):
     company: Optional[str] = None
     location: Optional[str] = None
     photo_url: Optional[str] = None
+    icp_score: Optional[int] = None
+    employee_count: Optional[str] = None
+    company_summary: Optional[str] = None
+    ai_signal: Optional[str] = None
+    ai_signal_analysis: Optional[str] = None
+    why_trace_fits: Optional[str] = None
+    recommended_approach: Optional[str] = None
+    score_breakdown: Optional[str] = None
+    job_search_url: Optional[str] = None
 
 
 class ProfileResponse(BaseModel):
@@ -70,6 +89,15 @@ class ProfileResponse(BaseModel):
     company: Optional[str]
     location: Optional[str]
     photo_url: Optional[str]
+    icp_score: Optional[int]
+    employee_count: Optional[str]
+    company_summary: Optional[str]
+    ai_signal: Optional[str]
+    ai_signal_analysis: Optional[str]
+    why_trace_fits: Optional[str]
+    recommended_approach: Optional[str]
+    score_breakdown: Optional[str]
+    job_search_url: Optional[str]
     status: str
     created_at: datetime
 
@@ -91,7 +119,7 @@ class StatsResponse(BaseModel):
 
 # --- App ---------------------------------------------------------------------
 
-app = FastAPI(title="LinkedIn Swipe")
+app = FastAPI(title="Lead Swipe")
 
 app.add_middleware(
     CORSMiddleware,
@@ -125,6 +153,11 @@ def get_db():
 # --- Web App (served as HTML) -----------------------------------------------
 
 
+@app.get("/", response_class=RedirectResponse)
+def root():
+    return RedirectResponse(url="/app?key=" + API_KEY)
+
+
 @app.get("/app", response_class=HTMLResponse)
 def serve_app(key: str = Query("")):
     """Serve the swipe web app. Auth via ?key= query param."""
@@ -134,7 +167,7 @@ def serve_app(key: str = Query("")):
     return HTMLResponse(WEB_APP_HTML.replace("__API_KEY__", key))
 
 
-WEB_APP_HTML = """<!DOCTYPE html>
+WEB_APP_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -143,7 +176,7 @@ WEB_APP_HTML = """<!DOCTYPE html>
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Swipe">
 <meta name="robots" content="noindex, nofollow">
-<title>LinkedIn Swipe</title>
+<title>Lead Swipe</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Crimson+Text:wght@400;600&family=Playfair+Display:ital@1&display=swap" rel="stylesheet">
 <style>
@@ -154,7 +187,7 @@ body {
   background: #e8e8e8;
   color: rgba(0,0,0,0.7);
   display: flex; flex-direction: column;
-  padding-top: env(safe-area-inset-top, 44px);
+  padding-top: env(safe-area-inset-top, 20px);
   padding-bottom: env(safe-area-inset-bottom, 20px);
 }
 
@@ -172,58 +205,91 @@ body {
 .header .counter { font-size: 13px; color: rgba(0,0,0,0.35); }
 
 .card-area {
-  flex: 1; display: flex; align-items: center; justify-content: center;
-  padding: 20px; overflow: hidden;
+  flex: 1; display: flex; align-items: flex-start; justify-content: center;
+  padding: 16px; overflow-y: auto; -webkit-overflow-scrolling: touch;
 }
 
 .card {
-  background: #fff; width: 100%; max-width: 400px;
-  border-radius: 3px; padding: 40px 28px;
+  background: #fff; width: 100%; max-width: 440px;
+  border-radius: 3px; padding: 32px 24px 24px;
   box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-  text-align: center;
   animation: fadeIn 0.2s ease-out;
 }
 @keyframes fadeIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 
+.card-top {
+  display: flex; align-items: flex-start; gap: 16px; margin-bottom: 20px;
+}
 .card .avatar {
-  width: 96px; height: 96px; border-radius: 50%;
+  width: 72px; height: 72px; border-radius: 50%; flex-shrink: 0;
   background: rgba(0,0,0,0.06); color: rgba(0,0,0,0.35);
   font-family: 'Playfair Display', serif; font-style: italic;
-  font-size: 28px; line-height: 96px;
-  margin: 0 auto 20px; object-fit: cover;
+  font-size: 22px;
   overflow: hidden; display: flex; align-items: center; justify-content: center;
 }
 .card .avatar img {
   width: 100%; height: 100%; object-fit: cover; border-radius: 50%;
 }
+.card-top-info { flex: 1; min-width: 0; }
 
 .card .name {
-  font-size: 24px; font-weight: 600; color: rgba(0,0,0,0.85);
-  letter-spacing: 0.2px;
+  font-size: 22px; font-weight: 600; color: rgba(0,0,0,0.85);
+  letter-spacing: 0.2px; line-height: 1.2;
 }
 .card .headline {
-  font-size: 15px; color: rgba(0,0,0,0.55); margin-top: 8px;
-  line-height: 1.4;
+  font-size: 14px; color: rgba(0,0,0,0.55); margin-top: 4px;
+  line-height: 1.3;
 }
-.card .company {
-  font-size: 14px; color: rgba(0,0,0,0.6); margin-top: 6px;
-  font-weight: 600;
+.card .meta-row {
+  display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px;
+  font-size: 13px; color: rgba(0,0,0,0.4);
 }
-.card .location {
-  font-size: 13px; color: rgba(0,0,0,0.35); margin-top: 4px;
+.card .meta-row span { white-space: nowrap; }
+
+.icp-badge {
+  display: inline-block; padding: 2px 10px; border-radius: 2px;
+  font-size: 13px; font-weight: 600; letter-spacing: 0.5px;
+  margin-top: 6px;
 }
-.card .view-link {
-  display: block; margin-top: 28px;
-  padding: 16px 28px; background: rgba(0,0,0,0.85);
-  color: rgba(255,255,255,0.95); text-decoration: none;
-  font-family: 'Crimson Text', serif; font-size: 16px; font-weight: 600;
+.icp-high { background: rgba(0,120,0,0.1); color: rgba(0,120,0,0.8); }
+.icp-mid { background: rgba(180,130,0,0.1); color: rgba(180,130,0,0.8); }
+.icp-low { background: rgba(180,0,0,0.1); color: rgba(180,0,0,0.8); }
+
+.sep { width: 40px; height: 1px; background: rgba(0,0,0,0.1); margin: 16px 0; }
+
+.section-label {
+  font-size: 11px; font-weight: 600; letter-spacing: 1.5px;
+  text-transform: uppercase; color: rgba(0,0,0,0.3); margin-bottom: 6px;
+}
+.section-text {
+  font-size: 15px; color: rgba(0,0,0,0.65); line-height: 1.5;
+  margin-bottom: 16px;
+}
+.section-text:last-child { margin-bottom: 0; }
+
+.insight-block {
+  border-left: 2px solid rgba(0,0,0,0.1);
+  background: rgba(0,0,0,0.02); padding: 10px 14px;
+  margin-bottom: 16px;
+}
+.insight-block .section-text {
+  font-family: 'Playfair Display', serif; font-style: italic;
+  font-size: 14px; color: rgba(0,0,0,0.55); margin-bottom: 0;
+}
+
+.card-links {
+  display: flex; gap: 10px; margin-top: 20px;
+}
+.card-links a {
+  flex: 1; display: block; padding: 12px 16px;
+  text-decoration: none; text-align: center;
+  font-family: 'Crimson Text', serif; font-size: 14px; font-weight: 600;
   letter-spacing: 0.5px; border-radius: 2px;
-  text-align: center; transition: opacity 0.15s;
+  transition: opacity 0.15s;
 }
-.card .view-link:active { opacity: 0.6; }
-.card .view-hint {
-  font-size: 12px; color: rgba(0,0,0,0.3); margin-top: 10px;
-}
+.card-links a:active { opacity: 0.6; }
+.link-linkedin { background: rgba(0,0,0,0.85); color: rgba(255,255,255,0.95); }
+.link-signal { background: rgba(0,0,0,0.06); color: rgba(0,0,0,0.6); }
 
 .actions {
   background: #fff; padding: 12px 20px 8px;
@@ -259,35 +325,47 @@ body {
   border: none; border-radius: 2px; font-family: 'Crimson Text', serif;
   font-size: 15px; font-weight: 600; cursor: pointer;
 }
+
+.kbd-hint {
+  text-align: center; font-size: 12px; color: rgba(0,0,0,0.25);
+  padding: 4px 0 0; background: #fff;
+}
 </style>
 </head>
 <body>
 
 <div class="header">
-  <h1>LinkedIn Swipe</h1>
+  <h1>Lead Swipe</h1>
   <span class="counter" id="counter">--</span>
 </div>
 
 <div class="card-area" id="cardArea">
   <div class="card" id="card">
-    <div class="avatar" id="avatar">--</div>
-    <div class="name" id="profileName">Loading...</div>
-    <div class="headline" id="profileHeadline"></div>
-    <div class="company" id="profileCompany"></div>
-    <div class="location" id="profileLocation"></div>
-    <a class="view-link" id="viewLink" href="#" target="_blank" rel="noopener">View Full Profile</a>
-    <div class="view-hint">Opens in LinkedIn app</div>
+    <div class="card-top">
+      <div class="avatar" id="avatar">--</div>
+      <div class="card-top-info">
+        <div class="name" id="profileName">Loading...</div>
+        <div class="headline" id="profileHeadline"></div>
+        <div class="meta-row" id="profileMeta"></div>
+        <div id="icpBadge"></div>
+      </div>
+    </div>
+    <div id="enrichmentArea"></div>
+    <div class="card-links" id="cardLinks">
+      <a class="link-linkedin" id="viewLink" href="#" target="_blank" rel="noopener">LinkedIn Profile</a>
+    </div>
   </div>
 </div>
 
 <div class="actions" id="actions">
-  <button class="btn btn-skip" onclick="doSwipe('left')">SKIP</button>
-  <button class="btn btn-connect" onclick="doSwipe('right')">CONNECT</button>
+  <button class="btn btn-skip" id="btnSkip" onclick="doSwipe('left')">SKIP</button>
+  <button class="btn btn-connect" id="btnConnect" onclick="doSwipe('right')">CONNECT</button>
 </div>
+<div class="kbd-hint" id="kbdHint"></div>
 
 <div class="empty" id="emptyState">
   <h2>All caught up</h2>
-  <p>New profiles arrive each morning</p>
+  <p>No pending leads to review</p>
   <button class="refresh-btn" onclick="loadProfiles()">Refresh</button>
 </div>
 
@@ -300,24 +378,37 @@ let profiles = [];
 let idx = 0;
 let busy = false;
 
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
 function getInitials(name) {
   return name.split(' ').map(w => w[0]).filter(Boolean).slice(0,2).join('').toUpperCase();
+}
+
+function icpClass(score) {
+  if (score >= 75) return 'icp-high';
+  if (score >= 50) return 'icp-mid';
+  return 'icp-low';
 }
 
 async function loadProfiles() {
   document.getElementById('emptyState').classList.remove('visible');
   document.getElementById('cardArea').style.display = 'flex';
   document.getElementById('actions').style.display = 'flex';
+  document.getElementById('kbdHint').style.display = '';
   document.getElementById('profileName').textContent = 'Loading...';
   document.getElementById('profileHeadline').textContent = '';
+  document.getElementById('enrichmentArea').innerHTML = '';
   try {
-    const r = await fetch(BASE + '/profiles' + K + '&limit=60');
+    const r = await fetch(BASE + '/profiles' + K + '&limit=200');
     profiles = await r.json();
     idx = 0;
     showCurrent();
   } catch(e) {
     document.getElementById('profileName').textContent = 'Error: ' + e.message;
-    console.error('Load failed:', e);
   }
 }
 
@@ -325,29 +416,86 @@ function showCurrent() {
   if (idx >= profiles.length) {
     document.getElementById('cardArea').style.display = 'none';
     document.getElementById('actions').style.display = 'none';
+    document.getElementById('kbdHint').style.display = 'none';
     document.getElementById('emptyState').classList.add('visible');
     return;
   }
   const p = profiles[idx];
+
   document.getElementById('profileName').textContent = p.name || 'Profile';
   document.getElementById('profileHeadline').textContent = p.headline || '';
-  document.getElementById('profileCompany').textContent = p.company ? p.company : '';
-  document.getElementById('profileLocation').textContent = p.location ? p.location : '';
-  const av = document.getElementById('avatar');
-  if (p.photo_url) {
-    av.innerHTML = '<img src="' + p.photo_url + '" onerror="this.parentNode.textContent=\'' + getInitials(p.name || '?') + '\'">';
-  } else if (p.company) {
-    // Use Clearbit company logo as visual
-    const domain = p.company.toLowerCase().replace(/[^a-z0-9]/g,'') + '.com';
-    av.innerHTML = '<img src="https://logo.clearbit.com/' + domain + '?size=192" onerror="this.parentNode.textContent=\'' + getInitials(p.name || '?') + '\'" style="border-radius:0;padding:16px;">';
+
+  // Meta row: company, location, employees
+  let meta = [];
+  if (p.company) meta.push(esc(p.company));
+  if (p.location) meta.push(esc(p.location));
+  if (p.employee_count) meta.push(esc(p.employee_count) + ' employees');
+  document.getElementById('profileMeta').innerHTML = meta.map(m => '<span>' + m + '</span>').join('');
+
+  // ICP badge
+  const badge = document.getElementById('icpBadge');
+  if (p.icp_score != null) {
+    badge.innerHTML = '<span class="icp-badge ' + icpClass(p.icp_score) + '">ICP ' + p.icp_score + '</span>';
   } else {
-    av.innerHTML = ''; av.textContent = getInitials(p.name || '?');
+    badge.innerHTML = '';
   }
-  document.getElementById('viewLink').href = p.linkedin_url;
+
+  // Avatar
+  const av = document.getElementById('avatar');
+  const initials = getInitials(p.name || '?');
+  if (p.photo_url) {
+    av.innerHTML = '<img src="' + esc(p.photo_url) + '" onerror="this.parentNode.textContent=\'' + initials + '\'">';
+  } else if (p.company) {
+    const domain = p.company.toLowerCase().replace(/[^a-z0-9]/g,'') + '.com';
+    av.innerHTML = '<img src="https://logo.clearbit.com/' + domain + '?size=192" onerror="this.parentNode.textContent=\'' + initials + '\'" style="border-radius:0;padding:12px;">';
+  } else {
+    av.innerHTML = ''; av.textContent = initials;
+  }
+
+  // Enrichment sections
+  let html = '';
+
+  if (p.company_summary) {
+    html += '<div class="sep"></div>';
+    html += '<div class="section-label">Company</div>';
+    html += '<div class="section-text">' + esc(p.company_summary) + '</div>';
+  }
+
+  if (p.ai_signal) {
+    html += '<div class="sep"></div>';
+    html += '<div class="section-label">AI Signal</div>';
+    html += '<div class="section-text">' + esc(p.ai_signal) + '</div>';
+    if (p.ai_signal_analysis) {
+      html += '<div class="insight-block"><div class="section-text">' + esc(p.ai_signal_analysis) + '</div></div>';
+    }
+  }
+
+  if (p.why_trace_fits) {
+    html += '<div class="sep"></div>';
+    html += '<div class="section-label">Why Trace Fits</div>';
+    html += '<div class="section-text">' + esc(p.why_trace_fits) + '</div>';
+  }
+
+  if (p.recommended_approach) {
+    html += '<div class="sep"></div>';
+    html += '<div class="section-label">Recommended Approach</div>';
+    html += '<div class="section-text">' + esc(p.recommended_approach) + '</div>';
+  }
+
+  document.getElementById('enrichmentArea').innerHTML = html;
+
+  // Links
+  let links = '<a class="link-linkedin" href="' + esc(p.linkedin_url) + '" target="_blank" rel="noopener">LinkedIn Profile</a>';
+  if (p.job_search_url) {
+    links += '<a class="link-signal" href="' + esc(p.job_search_url) + '" target="_blank" rel="noopener">AI Job Posting</a>';
+  }
+  document.getElementById('cardLinks').innerHTML = links;
+
   document.getElementById('counter').textContent = (idx + 1) + ' / ' + profiles.length;
   document.getElementById('card').style.animation = 'none';
   void document.getElementById('card').offsetHeight;
   document.getElementById('card').style.animation = 'fadeIn 0.2s ease-out';
+  document.getElementById('cardArea').scrollTop = 0;
 }
 
 async function doSwipe(direction) {
@@ -365,6 +513,16 @@ async function doSwipe(direction) {
   showCurrent();
   busy = false;
   document.querySelectorAll('.btn').forEach(b => b.disabled = false);
+}
+
+// Keyboard shortcuts
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'ArrowLeft' || e.key === '1') doSwipe('left');
+  if (e.key === 'ArrowRight' || e.key === '2') doSwipe('right');
+});
+
+if (window.matchMedia('(pointer: fine)').matches) {
+  document.getElementById('kbdHint').textContent = 'Keyboard: left arrow = skip, right arrow = connect';
 }
 
 loadProfiles();
@@ -385,7 +543,7 @@ def get_pending_profiles(
     return (
         db.query(Profile)
         .filter(Profile.status == "pending")
-        .order_by(Profile.created_at.desc())
+        .order_by(Profile.icp_score.desc().nullslast(), Profile.created_at.desc())
         .limit(limit)
         .all()
     )
@@ -469,7 +627,22 @@ def update_profile(
     profile = db.query(Profile).filter(Profile.id == profile_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
-    for key in ("photo_url", "headline", "company", "location", "linkedin_url"):
+    for key in (
+        "photo_url",
+        "headline",
+        "company",
+        "location",
+        "linkedin_url",
+        "icp_score",
+        "employee_count",
+        "company_summary",
+        "ai_signal",
+        "ai_signal_analysis",
+        "why_trace_fits",
+        "recommended_approach",
+        "score_breakdown",
+        "job_search_url",
+    ):
         if key in updates:
             setattr(profile, key, updates[key])
     db.commit()
