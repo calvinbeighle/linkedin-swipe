@@ -901,6 +901,32 @@ def send_email(
             text=True,
         )
         log.info(f"Email sending to {email} for {req.name} (pid {proc.pid})")
+
+        # Also send LinkedIn connection request via OpenClaw
+        connect_prompt = (
+            f"Read ~/.claude/skills/openclaw-linkedin-connect/SKILL.md and follow it.\n\n"
+            f"Send a connection request to {req.name} at {req.linkedin_url}.\n"
+            f"Send without a note. If they show Follow instead of Connect, or are already connected, skip."
+        )
+        try:
+            subprocess.Popen(
+                [
+                    "/usr/local/bin/claude",
+                    "--print",
+                    "--allowedTools",
+                    "Bash,Read",
+                    "-p",
+                    connect_prompt,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                text=True,
+            )
+            log.info(f"LinkedIn connect request started for {req.name}")
+        except Exception:
+            log.warning(f"LinkedIn connect failed to start for {req.name}")
+
         return {"status": "sending", "name": req.name, "email": email}
     except Exception as e:
         log.error(f"Failed to start email send: {e}")
