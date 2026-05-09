@@ -7,7 +7,11 @@ Uses Google Sheets as the database via gws CLI.
 import json
 import logging
 import os
+import re
 import subprocess
+import threading
+import time
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
@@ -30,7 +34,7 @@ log = logging.getLogger(__name__)
 
 SHEET_ID = os.getenv("SWIPE_SHEET_ID", "1JvQrDO8To0h8WFcPNrTFLS46jze2zeTAMNc8cjj11eI")
 # Tabs to read leads from, in priority order
-SHEET_TABS = ["Prospect Tracker", "OpenClaw iMac"]
+SHEET_TABS = ["OpenClaw iMac"]
 
 API_KEY = os.getenv("SWIPE_API_KEY", "")
 
@@ -144,6 +148,8 @@ FIELD_MAP = {
     "score_breakdown": ["Score Breakdown"],
     "outreach_status": ["Outreach Status", "LinkedIn Status"],
     "reviewed": ["Reviewed"],
+    "date_sent": ["Date Sent"],
+    "date_reviewed": ["Date Reviewed"],
 }
 
 
@@ -259,6 +265,7 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 .topbar{height:52px;display:flex;align-items:center;justify-content:center;flex-shrink:0;position:relative;z-index:10}
 .topbar .logo{font-size:24px;font-weight:800;background:linear-gradient(135deg,#fd267a,#ff6036);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
 .topbar .counter{position:absolute;right:16px;font-size:12px;color:rgba(255,255,255,0.35);font-weight:600}
+.topbar .daily-count{position:absolute;left:16px;font-size:11px;color:rgba(255,255,255,0.3);font-weight:600}
 .stack{flex:1;position:relative;display:flex;align-items:center;justify-content:center;padding:8px;overflow:hidden}
 .card{position:absolute;width:calc(100% - 16px);max-width:420px;height:calc(100% - 8px);border-radius:12px;overflow-y:auto;overflow-x:hidden;background:#222;box-shadow:0 4px 24px rgba(0,0,0,0.5);transform-origin:50% 80%;will-change:transform;cursor:grab;touch-action:pan-y;-webkit-overflow-scrolling:touch;scroll-snap-type:y proximity}
 .card:active{cursor:grabbing}
@@ -290,7 +297,7 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 .detail-links{display:flex;gap:10px;margin-top:8px}
 .detail-links a{flex:1;display:block;padding:10px;text-align:center;text-decoration:none;font-size:13px;font-weight:700;border-radius:20px;transition:opacity 0.15s}
 .detail-links a:active{opacity:0.6}
-.link-li{background:rgba(255,255,255,0.15);color:#fff}
+.link-li{background:rgba(255,255,255,0.1);color:rgba(255,255,255,0.7)}
 .link-job{background:rgba(45,248,138,0.15);color:#2DF88A}
 .email-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:100;align-items:center;justify-content:center;padding:16px}
 .email-overlay.visible{display:flex}
@@ -304,8 +311,8 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 .email-edit-row{display:flex;gap:8px;margin-top:16px}
 .email-edit-row input{flex:1;padding:12px 14px;border:1px solid rgba(255,255,255,0.15);border-radius:20px;background:rgba(255,255,255,0.08);color:#fff;font-size:14px;font-family:inherit;outline:none}
 .email-edit-row input::placeholder{color:rgba(255,255,255,0.3)}
-.email-edit-row input:focus{border-color:rgba(45,248,138,0.5)}
-.email-edit-row button{padding:10px 18px;border:none;border-radius:20px;background:rgba(33,160,255,0.3);color:#21a0ff;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
+.email-edit-row input:focus{border-color:rgba(150,170,190,0.5)}
+.email-edit-row button{padding:10px 18px;border:none;border-radius:20px;background:rgba(150,170,190,0.2);color:rgba(150,170,190,0.9);font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
 .email-edit-row button:active{opacity:0.7}
 .email-edit-row button:disabled{opacity:0.3}
 .email-loading{font-size:12px;color:rgba(255,255,255,0.4);margin-top:8px;display:none}
@@ -320,10 +327,10 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 .action-btn:hover{transform:scale(1.08);box-shadow:0 0 20px rgba(255,255,255,0.1)}
 .btn-nope{border-color:#fe3c72}
 .btn-nope svg{width:26px;height:26px;stroke:#fe3c72;fill:none;stroke-width:3;stroke-linecap:round}
-.btn-info{width:46px;height:46px;border-color:#21a0ff}
-.btn-info svg{width:20px;height:20px;fill:#21a0ff}
-.btn-undo{width:46px;height:46px;border-color:#f5a623}
-.btn-undo svg{width:20px;height:20px;fill:none;stroke:#f5a623;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
+.btn-info{width:46px;height:46px;border-color:rgba(150,170,190,0.5)}
+.btn-info svg{width:20px;height:20px;fill:rgba(150,170,190,0.7)}
+.btn-undo{width:46px;height:46px;border-color:rgba(200,180,140,0.5)}
+.btn-undo svg{width:20px;height:20px;fill:none;stroke:rgba(200,180,140,0.7);stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
 .btn-undo.disabled{opacity:0.2;pointer-events:none}
 .btn-like{border-color:#2DF88A}
 .btn-like svg{width:28px;height:28px;fill:#2DF88A}
@@ -336,6 +343,7 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 </head>
 <body>
 <div class="topbar">
+  <span class="daily-count" id="dailyCount"></span>
   <div class="logo">lead swipe</div>
   <span class="counter" id="counter"></span>
 </div>
@@ -355,6 +363,12 @@ const $=id=>document.getElementById(id);
 const stackEl=$('stack');
 
 let profiles=[], idx=0, locked=false, lastIdx=-1;
+
+let dailyCount=0;
+function updateDailyUI(){$('dailyCount').textContent=dailyCount?dailyCount+' today':''}
+function incDaily(){dailyCount++;updateDailyUI()}
+function decDaily(){dailyCount=Math.max(0,dailyCount-1);updateDailyUI()}
+async function fetchDailyCount(){try{const r=await fetch(BASE+'/stats'+K);const d=await r.json();dailyCount=d.swiped_today||0;updateDailyUI()}catch(e){}}
 
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
 function ini(n){return n.split(' ').map(w=>w[0]).filter(Boolean).slice(0,2).join('').toUpperCase()}
@@ -418,11 +432,13 @@ function doSwipe(dir){
     card.querySelector('.stamp-nope').style.opacity='1';
     card.classList.add('exit-left');
     lastIdx=swipedIdx; idx++;
+    incDaily();
     api('/swipe',{tab:swipedProfile._tab,row:swipedProfile._row,direction:'left'});
     setTimeout(render,400);
   } else {
     card.querySelector('.stamp-like').style.opacity='1';
     card.classList.add('exit-right');
+    incDaily();
     // Show email for THIS person, don't advance idx yet
     showEmail(swipedProfile, swipedIdx);
   }
@@ -433,6 +449,7 @@ function doUndo(){
   locked=true;
   const p=profiles[lastIdx];
   api('/undo',{tab:p._tab,row:p._row});
+  decDaily();
   idx=lastIdx; lastIdx=-1;
   render();
 }
@@ -540,7 +557,7 @@ function closeEmail(send){
 }
 function showToast(msg,color){
   const t=document.createElement('div');
-  t.style.cssText='position:fixed;top:60px;left:50%;transform:translateX(-50%);padding:12px 24px;border-radius:20px;font-size:14px;font-weight:600;z-index:200;pointer-events:none;opacity:0;transition:opacity .3s;background:'+(color==='red'?'rgba(254,60,114,.9)':'rgba(45,248,138,.9)')+';color:'+(color==='red'?'#fff':'#000');
+  t.style.cssText='position:fixed;top:60px;left:50%;transform:translateX(-50%);padding:12px 24px;border-radius:20px;font-size:14px;font-weight:600;z-index:200;pointer-events:none;opacity:0;transition:opacity .3s;background:'+(color==='red'?'rgba(200,140,140,.85)':'rgba(130,190,160,.85)')+';color:'+(color==='red'?'#fff':'#1a1a1a');
   t.textContent=msg;document.body.appendChild(t);
   requestAnimationFrame(()=>{t.style.opacity='1'});
   setTimeout(()=>{t.style.opacity='0';setTimeout(()=>t.remove(),300)},3000);
@@ -562,6 +579,7 @@ document.addEventListener('keydown',e=>{
 });
 
 loadProfiles();
+fetchDailyCount();
 </script>
 </body>
 </html>"""
@@ -578,7 +596,9 @@ def get_pending_profiles(
     """Return profiles that haven't been reviewed or reached out to."""
     _refresh_cache()
     pending = [
-        p for p in _cache["profiles"] if not p["reviewed"] and not p["outreach_status"]
+        p
+        for p in _cache["profiles"]
+        if not p["reviewed"] and not p["outreach_status"] and not p.get("date_sent")
     ]
     # Sort by ICP score descending (nulls last)
     pending.sort(
@@ -615,6 +635,12 @@ def record_swipe(
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to update sheet")
 
+    # Write today's date to Date Reviewed column
+    date_reviewed_col = _col_letter(headers, "Date Reviewed")
+    if date_reviewed_col:
+        today = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
+        _gws_update(tab, f"{date_reviewed_col}{row}", [[today]])
+
     return {"status": "ok", "tab": tab, "row": row, "direction": swipe.direction}
 
 
@@ -638,6 +664,10 @@ def undo_swipe(
     ok = _gws_update(req.tab, f"{reviewed_col}{req.row}", [[""]])
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to update sheet")
+    # Clear Date Reviewed on undo
+    date_reviewed_col = _col_letter(headers, "Date Reviewed")
+    if date_reviewed_col:
+        _gws_update(req.tab, f"{date_reviewed_col}{req.row}", [[""]])
     return {"status": "ok", "tab": req.tab, "row": req.row}
 
 
@@ -647,17 +677,22 @@ def get_stats(_auth: None = Depends(verify_api_key)):
         _refresh_cache()
     total = len(_cache["profiles"])
     pending = sum(
-        1 for p in _cache["profiles"] if not p["reviewed"] and not p["outreach_status"]
+        1
+        for p in _cache["profiles"]
+        if not p["reviewed"] and not p["outreach_status"] and not p.get("date_sent")
     )
     liked = sum(1 for p in _cache["profiles"] if p["reviewed"].lower() == "liked")
     skipped = sum(1 for p in _cache["profiles"] if p["reviewed"].lower() == "skipped")
     reached_out = sum(1 for p in _cache["profiles"] if p["outreach_status"])
+    today = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
+    swiped_today = sum(1 for p in _cache["profiles"] if p.get("date_reviewed") == today)
     return {
         "total": total,
         "pending": pending,
         "liked": liked,
         "skipped": skipped,
         "reached_out": reached_out,
+        "swiped_today": swiped_today,
     }
 
 
@@ -761,6 +796,58 @@ def adjust_email(
         raise HTTPException(status_code=500, detail="Failed to adjust email")
 
 
+MAX_BROWSER_TABS = 8
+
+
+def _send_linkedin_connect(name: str, linkedin_url: str):
+    """Send a LinkedIn connection request via OpenClaw agent."""
+    try:
+        time.sleep(5)
+        log.info(f"[LinkedIn Connect] Starting for {name} at {linkedin_url}")
+
+        prompt = (
+            f"Send a LinkedIn connection request to {name} at {linkedin_url}. "
+            f"Open the profile in a new tab. Find the Connect button (may be under 'More actions' dropdown). "
+            f"Click Connect, then click 'Send without a note'. Close the tab when done. "
+            f"If they show Follow instead of Connect, or are already connected, or have a pending invite, skip. "
+            f"Max {MAX_BROWSER_TABS} browser tabs -- close excess before opening new ones. "
+            f"Only click Connect buttons containing '{name.split()[0]}' to avoid sidebar recommendations."
+        )
+
+        env = os.environ.copy()
+        env["OPENCLAW_BROWSER_PROFILE"] = "li-connect"
+
+        result = subprocess.run(
+            ["openclaw", "agent", "--agent", "main", "-m", prompt],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+        )
+
+        output = (result.stdout + result.stderr).strip()
+        output_lower = output.lower()
+        if "sent" in output_lower or (
+            "connect" in output_lower and "click" in output_lower
+        ):
+            log.info(f"[LinkedIn Connect] Connection request SENT for {name}")
+        elif "already connected" in output_lower or "1st degree" in output_lower:
+            log.info(f"[LinkedIn Connect] {name} already connected, skipped")
+        elif "follow" in output_lower and "skip" in output_lower:
+            log.info(f"[LinkedIn Connect] {name} shows Follow only, skipped")
+        elif "pending" in output_lower:
+            log.info(f"[LinkedIn Connect] {name} already has pending invite")
+        elif "not logged in" in output_lower or "join linkedin" in output_lower:
+            log.error(f"[LinkedIn Connect] LinkedIn session expired for {name}")
+        else:
+            log.warning(f"[LinkedIn Connect] Outcome for {name}: {output[:300]}")
+
+    except subprocess.TimeoutExpired:
+        log.error(f"[LinkedIn Connect] Timed out for {name}")
+    except Exception as e:
+        log.error(f"[LinkedIn Connect] Error for {name}: {e}")
+
+
 class SendEmailRequest(BaseModel):
     linkedin_url: str
     name: str
@@ -780,6 +867,12 @@ def send_email(
     """Enrich via Apollo (sync), then fire-and-forget Claude Code to send."""
     import sys as _sys
     import uuid
+
+    log.info(
+        f"[Send Email] Request: name='{req.name}', company='{req.company}', "
+        f"linkedin='{req.linkedin_url}', subject='{req.subject[:60]}', "
+        f"tab='{req.tab}', row={req.row}"
+    )
 
     html_body = req.body.replace("\n", "<br>")
     first_name = req.name.split()[0] if req.name else ""
@@ -808,8 +901,21 @@ def send_email(
         enriched_name = r.get("name", "")
         # Safety check: verify enriched person matches intended recipient
         if email and enriched_name:
-            expected = req.name.lower().split()[0]
-            actual = enriched_name.lower().split()[0]
+
+            def _normalize(s):
+                """Strip accents and lowercase for comparison."""
+                return (
+                    unicodedata.normalize("NFD", s.lower())
+                    .encode("ascii", "ignore")
+                    .decode()
+                )
+
+            expected = _normalize(req.name.split()[0])
+            actual = _normalize(enriched_name.split()[0])
+            log.info(
+                f"[Send Email] Name check: sheet='{req.name}' -> '{expected}', "
+                f"Apollo='{enriched_name}' -> '{actual}', email={email}"
+            )
             if expected != actual:
                 log.warning(
                     f"NAME MISMATCH: expected {req.name} but Apollo returned {enriched_name} ({email}). Blocking send."
@@ -821,14 +927,19 @@ def send_email(
                     "note": f"LinkedIn URL returned {enriched_name}, not {req.name}. Check sheet data.",
                 }
         if not email:
+            log.info(
+                f"[Send Email] No email from LinkedIn enrichment, trying name lookup for {req.name}"
+            )
             r = apollo.enrich_by_name(first_name, last_name, req.company)
             email = r.get("email")
     except Exception as e:
-        log.error(f"Apollo enrichment failed: {e}")
+        log.error(f"[Send Email] Apollo enrichment failed for {req.name}: {e}")
 
     if not email:
-        log.warning(f"No email found for {req.name}")
+        log.warning(f"[Send Email] No email found for {req.name} -- aborting")
         return {"status": "no_email", "name": req.name}
+
+    log.info(f"[Send Email] Proceeding to send to {email} for {req.name}")
 
     # Step 2: Fire-and-forget Claude Code to send
     prompt = (
@@ -863,30 +974,12 @@ def send_email(
         )
         log.info(f"Email sending to {email} for {req.name} (pid {proc.pid})")
 
-        # Also send LinkedIn connection request via OpenClaw
-        connect_prompt = (
-            f"Read ~/.claude/skills/openclaw-linkedin-connect/SKILL.md and follow it.\n\n"
-            f"Send a connection request to {req.name} at {req.linkedin_url}.\n"
-            f"Send without a note. If they show Follow instead of Connect, or are already connected, skip."
-        )
-        try:
-            subprocess.Popen(
-                [
-                    "/usr/local/bin/claude",
-                    "--print",
-                    "--allowedTools",
-                    "Bash,Read",
-                    "-p",
-                    connect_prompt,
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=env,
-                text=True,
-            )
-            log.info(f"LinkedIn connect request started for {req.name}")
-        except Exception:
-            log.warning(f"LinkedIn connect failed to start for {req.name}")
+        # Send LinkedIn connection request via OpenClaw (background thread)
+        threading.Thread(
+            target=_send_linkedin_connect,
+            args=(req.name, req.linkedin_url),
+            daemon=True,
+        ).start()
 
         return {"status": "sending", "name": req.name, "email": email}
     except Exception as e:
