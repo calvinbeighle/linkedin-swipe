@@ -4,8 +4,6 @@ Lead Swipe -- FastAPI backend + web app.
 Uses Google Sheets as the database via gws CLI.
 """
 
-import base64
-import hashlib
 import json
 import logging
 import os
@@ -15,7 +13,7 @@ from typing import List, Optional
 
 import requests
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -35,8 +33,6 @@ SHEET_ID = os.getenv("SWIPE_SHEET_ID", "1JvQrDO8To0h8WFcPNrTFLS46jze2zeTAMNc8cjj
 SHEET_TABS = ["Prospect Tracker", "OpenClaw iMac"]
 
 API_KEY = os.getenv("SWIPE_API_KEY", "")
-BASIC_USER = os.getenv("SWIPE_BASIC_USER", "calvin")
-BASIC_PASS = os.getenv("SWIPE_BASIC_PASS", "")
 
 # --- Google Sheets helpers ---------------------------------------------------
 
@@ -218,24 +214,6 @@ os.makedirs(PHOTOS_DIR, exist_ok=True)
 app.mount("/photos", StaticFiles(directory=PHOTOS_DIR), name="photos")
 
 
-def check_basic_auth(request: Request):
-    if (
-        request.cookies.get("swipe_session")
-        == hashlib.sha256((BASIC_PASS + API_KEY).encode()).hexdigest()[:32]
-    ):
-        return True
-    auth = request.headers.get("authorization", "")
-    if auth.startswith("Basic "):
-        try:
-            decoded = base64.b64decode(auth[6:]).decode()
-            user, pwd = decoded.split(":", 1)
-            if user == BASIC_USER and pwd == BASIC_PASS:
-                return True
-        except Exception:
-            pass
-    return False
-
-
 def verify_api_key(authorization: str = Header(None), key: str = Query(None)):
     token = None
     if authorization and authorization.startswith("Bearer "):
@@ -250,30 +228,13 @@ def verify_api_key(authorization: str = Header(None), key: str = Query(None)):
 
 
 @app.get("/")
-def root(request: Request):
-    if BASIC_PASS and not check_basic_auth(request):
-        return Response(
-            status_code=401,
-            headers={"WWW-Authenticate": 'Basic realm="Lead Swipe"'},
-            content="Unauthorized",
-        )
-    resp = RedirectResponse(url="/app?key=" + API_KEY)
-    if BASIC_PASS:
-        resp.set_cookie(
-            "swipe_session",
-            hashlib.sha256((BASIC_PASS + API_KEY).encode()).hexdigest()[:32],
-            httponly=True,
-            samesite="lax",
-            max_age=86400 * 30,
-        )
-    return resp
+def root():
+    return RedirectResponse(url="/app?key=" + API_KEY)
 
 
 @app.get("/app", response_class=HTMLResponse)
-def serve_app(request: Request, key: str = Query("")):
+def serve_app(key: str = Query("")):
     if key != API_KEY:
-        if BASIC_PASS and check_basic_auth(request):
-            return RedirectResponse(url="/app?key=" + API_KEY)
         return HTMLResponse("<h1>Invalid key</h1>", status_code=401)
     return HTMLResponse(WEB_APP_HTML.replace("__API_KEY__", key))
 
