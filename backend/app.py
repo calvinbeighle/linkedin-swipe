@@ -235,14 +235,12 @@ def verify_api_key(authorization: str = Header(None), key: str = Query(None)):
 
 @app.get("/")
 def root():
-    return RedirectResponse(url="/app?key=" + API_KEY)
+    return RedirectResponse(url="/app")
 
 
 @app.get("/app", response_class=HTMLResponse)
-def serve_app(key: str = Query("")):
-    if key != API_KEY:
-        return HTMLResponse("<h1>Invalid key</h1>", status_code=401)
-    return HTMLResponse(WEB_APP_HTML.replace("__API_KEY__", key))
+def serve_app():
+    return HTMLResponse(WEB_APP_HTML.replace("__API_KEY__", API_KEY))
 
 
 # --- (HTML inserted below, then API endpoints) ---
