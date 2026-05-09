@@ -254,7 +254,7 @@ WEB_APP_HTML = r"""<!DOCTYPE html>
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Swipe">
 <meta name="robots" content="noindex, nofollow">
-<title>Lead Swipe</title>
+<title>Swipe</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none}
@@ -342,7 +342,7 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 <body>
 <div class="topbar">
   <span class="daily-count" id="dailyCount"></span>
-  <div class="logo">lead swipe</div>
+  <div class="logo">Swipe</div>
   <span class="counter" id="counter"></span>
 </div>
 <div class="stack" id="stack"></div>
