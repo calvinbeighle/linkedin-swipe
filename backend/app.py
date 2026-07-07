@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import subprocess
 import threading
 import time
@@ -337,6 +338,20 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 .empty h2{font-size:24px;font-weight:700;color:rgba(255,255,255,0.7)}
 .empty p{font-size:15px;color:rgba(255,255,255,0.35);margin-top:8px}
 .empty button{margin-top:24px;padding:12px 32px;background:linear-gradient(135deg,#fd267a,#ff6036);color:#fff;border:none;border-radius:24px;font-size:15px;font-weight:700;cursor:pointer}
+.msg-hero{position:relative;width:100%;min-height:100%;display:flex;flex-direction:column;padding:20px;background:#1d1d1f}
+.msg-badge{display:inline-block;align-self:flex-start;padding:4px 12px;border-radius:14px;font-size:11px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase}
+.msg-badge.email{background:rgba(45,248,138,0.18);color:#2DF88A}
+.msg-badge.linkedin{background:rgba(33,160,255,0.18);color:#21a0ff}
+.msg-badge.review{background:rgba(255,200,0,0.18);color:#ffc800}
+.msg-name{font-size:26px;font-weight:700;margin-top:14px;line-height:1.15}
+.msg-company{font-size:14px;color:rgba(255,255,255,0.55);margin-top:4px;font-weight:600}
+.msg-recipient{font-size:12px;color:rgba(255,255,255,0.4);margin-top:2px}
+.msg-subject{font-size:15px;font-weight:600;color:rgba(255,255,255,0.85);margin-top:16px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,0.1)}
+.msg-body{font-size:14px;color:rgba(255,255,255,0.75);line-height:1.6;white-space:pre-wrap;margin-top:12px}
+.msg-evidence{margin-top:16px;background:rgba(255,200,0,0.06);border:1px solid rgba(255,200,0,0.2);border-radius:8px;padding:12px}
+.msg-evidence .detail-label{color:#ffc800}
+.msg-evidence-item{font-size:12px;color:rgba(255,255,255,0.65);line-height:1.5;margin-top:6px}
+.msg-hint{font-size:11px;color:rgba(255,255,255,0.3);margin-top:auto;padding-top:18px;text-align:center;letter-spacing:1px}
 </style>
 </head>
 <body>
@@ -379,7 +394,15 @@ function api(path,body){return fetch(BASE+path,{method:'POST',headers:{'Content-
 async function loadProfiles(){
   $('emptyState').classList.remove('visible');
   stackEl.style.display='';$('actions').style.display='';
-  try{profiles=await(await fetch(BASE+'/profiles'+K+'&limit=200')).json();idx=0;lastIdx=-1;render()}catch(e){console.error(e)}
+  try{
+    const [msgs,leads]=await Promise.all([
+      fetch(BASE+'/messages'+K+'&status=pending&limit=200').then(r=>r.json()).catch(()=>[]),
+      fetch(BASE+'/profiles'+K+'&limit=200').then(r=>r.json()).catch(()=>[])
+    ]);
+    msgs.forEach(m=>m._msg=true);
+    profiles=msgs.concat(leads);
+    idx=0;lastIdx=-1;render();
+  }catch(e){console.error(e)}
 }
 
 function render(){
@@ -393,6 +416,7 @@ function render(){
 }
 
 function makeCard(p,isTop){
+  if(p._msg) return makeMessageCard(p,isTop);
   const c=document.createElement('div');c.className='card '+(isTop?'top':'behind');
   let bg='';
   if(p.photo_url) bg='background-image:url('+p.photo_url.replace(/'/g,'%27')+')';
@@ -414,6 +438,30 @@ function makeCard(p,isTop){
   return c;
 }
 
+function makeMessageCard(m,isTop){
+  const c=document.createElement('div');c.className='card '+(isTop?'top':'behind');
+  const isReview=m.kind==='cross_channel_review';
+  const badgeCls=isReview?'review':(m.channel==='email'?'email':'linkedin');
+  const badgeTxt=isReview?'Needs Review':(m.channel==='email'?'Email Follow-Up':'LinkedIn Message');
+  let ev='';
+  if(isReview&&m.evidence&&m.evidence.length){
+    ev='<div class="msg-evidence"><div class="detail-label">Cross-Channel Signals</div>'+
+      m.evidence.slice(0,6).map(s=>'<div class="msg-evidence-item">'+esc(typeof s==='string'?s:((s.source||'')+': '+(s.reason||'')+(s.evidence&&s.evidence.date?' ('+s.evidence.date+')':'')))+'</div>').join('')+'</div>';
+  }
+  const due=(m.meta&&(m.meta.due_at_local||m.meta.due_at))?'<div class="msg-recipient">Due: '+esc(m.meta.due_at_local||m.meta.due_at)+'</div>':'';
+  c.innerHTML='<div class="msg-hero">'+
+    '<span class="msg-badge '+badgeCls+'">'+badgeTxt+'</span>'+
+    '<div class="stamp stamp-nope">NOPE</div><div class="stamp stamp-like">SEND</div>'+
+    '<div class="msg-name">'+esc(m.name||m.recipient||'?')+'</div>'+
+    (m.company?'<div class="msg-company">'+esc(m.company)+'</div>':'')+
+    (m.recipient?'<div class="msg-recipient">To: '+esc(m.recipient)+'</div>':'')+due+
+    (m.subject?'<div class="msg-subject">'+esc(m.subject)+'</div>':'')+
+    '<div class="msg-body">'+esc(m.body||'')+'</div>'+ev+
+    '<div class="msg-hint">SWIPE RIGHT TO APPROVE SEND / LEFT TO REJECT</div>'+
+    '</div>';
+  return c;
+}
+
 // ── Swipe Logic (simple, no races) ──
 
 function doSwipe(dir){
@@ -426,6 +474,17 @@ function doSwipe(dir){
   const card=stackEl.querySelector('.card.top');
   if(!card){locked=false;return}
 
+  if(swipedProfile._msg){
+    // Message approval card: swipe records the decision, no email overlay.
+    const stamp=dir==='left'?'.stamp-nope':'.stamp-like';
+    card.querySelector(stamp).style.opacity='1';
+    card.classList.add(dir==='left'?'exit-left':'exit-right');
+    lastIdx=swipedIdx; idx++;
+    incDaily();
+    api('/messages/'+swipedProfile.id+'/swipe',{direction:dir});
+    setTimeout(render,400);
+    return;
+  }
   if(dir==='left'){
     card.querySelector('.stamp-nope').style.opacity='1';
     card.classList.add('exit-left');
@@ -446,7 +505,8 @@ function doUndo(){
   if(locked||lastIdx<0) return;
   locked=true;
   const p=profiles[lastIdx];
-  api('/undo',{tab:p._tab,row:p._row});
+  if(p._msg) api('/messages/'+p.id+'/undo',{});
+  else api('/undo',{tab:p._tab,row:p._row});
   decDaily();
   idx=lastIdx; lastIdx=-1;
   render();
@@ -983,6 +1043,229 @@ def send_email(
     except Exception as e:
         log.error(f"Failed to start email send: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Message approval queue (SQLite) -----------------------------------------
+#
+# Upstream agents on the iMac (email follow-up engine, LinkedIn message queues,
+# cross-channel reconciliation) push drafted messages here instead of sending.
+# Swiping right approves; the iMac dispatcher polls for approved items,
+# executes the send through the existing engines, then marks them done.
+
+MESSAGES_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "messages.db")
+
+
+def _msg_db() -> sqlite3.Connection:
+    con = sqlite3.connect(MESSAGES_DB)
+    con.row_factory = sqlite3.Row
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY,
+            source_ref TEXT NOT NULL UNIQUE,
+            channel TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'followup',
+            name TEXT NOT NULL DEFAULT '',
+            company TEXT NOT NULL DEFAULT '',
+            recipient TEXT NOT NULL DEFAULT '',
+            subject TEXT NOT NULL DEFAULT '',
+            body TEXT NOT NULL DEFAULT '',
+            evidence_json TEXT NOT NULL DEFAULT '[]',
+            meta_json TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL,
+            swiped_at TEXT,
+            done_at TEXT
+        )"""
+    )
+    return con
+
+
+def _msg_row_to_dict(r: sqlite3.Row) -> dict:
+    d = dict(r)
+    try:
+        d["evidence"] = json.loads(d.pop("evidence_json") or "[]")
+    except Exception:
+        d["evidence"] = []
+    try:
+        d["meta"] = json.loads(d.pop("meta_json") or "{}")
+    except Exception:
+        d["meta"] = {}
+    return d
+
+
+class MessageIn(BaseModel):
+    source_ref: str
+    channel: str  # "email" | "linkedin"
+    kind: str = "followup"  # "followup" | "cross_channel_review"
+    name: str = ""
+    company: str = ""
+    recipient: str = ""
+    subject: str = ""
+    body: str = ""
+    evidence: list = []
+    meta: dict = {}
+
+
+class MessageSwipe(BaseModel):
+    direction: str  # "right" = approve, "left" = reject
+
+
+@app.post("/messages")
+def ingest_messages(items: List[MessageIn], _auth: None = Depends(verify_api_key)):
+    """Idempotent bulk ingest keyed on source_ref."""
+    con = _msg_db()
+    now = datetime.now(timezone.utc).isoformat()
+    created, existing = [], []
+    try:
+        for m in items:
+            row = con.execute(
+                "SELECT * FROM messages WHERE source_ref = ?", (m.source_ref,)
+            ).fetchone()
+            if row:
+                existing.append(_msg_row_to_dict(row))
+                continue
+            cur = con.execute(
+                "INSERT INTO messages (source_ref, channel, kind, name, company, recipient,"
+                " subject, body, evidence_json, meta_json, status, created_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?, 'pending', ?)",
+                (
+                    m.source_ref,
+                    m.channel,
+                    m.kind,
+                    m.name,
+                    m.company,
+                    m.recipient,
+                    m.subject,
+                    m.body,
+                    json.dumps(m.evidence),
+                    json.dumps(m.meta),
+                    now,
+                ),
+            )
+            row = con.execute(
+                "SELECT * FROM messages WHERE id = ?", (cur.lastrowid,)
+            ).fetchone()
+            created.append(_msg_row_to_dict(row))
+        con.commit()
+        return {
+            "created": len(created),
+            "existing": len(existing),
+            "items": created + existing,
+        }
+    finally:
+        con.close()
+
+
+@app.get("/messages")
+def list_messages(
+    status: Optional[str] = Query(None),
+    limit: int = Query(200, ge=1, le=500),
+    _auth: None = Depends(verify_api_key),
+):
+    con = _msg_db()
+    try:
+        if status:
+            rows = con.execute(
+                "SELECT * FROM messages WHERE status = ? ORDER BY created_at ASC LIMIT ?",
+                (status, limit),
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT * FROM messages ORDER BY created_at ASC LIMIT ?", (limit,)
+            ).fetchall()
+        return [_msg_row_to_dict(r) for r in rows]
+    finally:
+        con.close()
+
+
+@app.post("/messages/{message_id}/swipe")
+def swipe_message(
+    message_id: int, swipe: MessageSwipe, _auth: None = Depends(verify_api_key)
+):
+    if swipe.direction not in ("right", "left"):
+        raise HTTPException(
+            status_code=400, detail="direction must be 'right' or 'left'"
+        )
+    new_status = "approved" if swipe.direction == "right" else "rejected"
+    con = _msg_db()
+    try:
+        row = con.execute(
+            "SELECT * FROM messages WHERE id = ?", (message_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Message not found")
+        con.execute(
+            "UPDATE messages SET status = ?, swiped_at = ? WHERE id = ?",
+            (new_status, datetime.now(timezone.utc).isoformat(), message_id),
+        )
+        con.commit()
+        return _msg_row_to_dict(
+            con.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
+        )
+    finally:
+        con.close()
+
+
+@app.post("/messages/{message_id}/undo")
+def undo_message(message_id: int, _auth: None = Depends(verify_api_key)):
+    """Return an approved/rejected (not yet dispatched) message to pending."""
+    con = _msg_db()
+    try:
+        row = con.execute(
+            "SELECT * FROM messages WHERE id = ?", (message_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Message not found")
+        if row["status"] not in ("approved", "rejected"):
+            raise HTTPException(
+                status_code=400, detail=f"Cannot undo from status {row['status']}"
+            )
+        con.execute(
+            "UPDATE messages SET status = 'pending', swiped_at = NULL WHERE id = ?",
+            (message_id,),
+        )
+        con.commit()
+        return {"status": "ok", "id": message_id}
+    finally:
+        con.close()
+
+
+@app.post("/messages/{message_id}/done")
+def message_done(message_id: int, _auth: None = Depends(verify_api_key)):
+    """Called by the iMac dispatcher after it has processed a swiped item."""
+    con = _msg_db()
+    try:
+        row = con.execute(
+            "SELECT * FROM messages WHERE id = ?", (message_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Message not found")
+        if row["status"] not in ("approved", "rejected"):
+            raise HTTPException(
+                status_code=400, detail="Only swiped items can be marked done"
+            )
+        con.execute(
+            "UPDATE messages SET status = 'done_' || status, done_at = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), message_id),
+        )
+        con.commit()
+        return _msg_row_to_dict(
+            con.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
+        )
+    finally:
+        con.close()
+
+
+@app.get("/messages/stats")
+def message_stats(_auth: None = Depends(verify_api_key)):
+    con = _msg_db()
+    try:
+        rows = con.execute(
+            "SELECT status, COUNT(*) AS n FROM messages GROUP BY status"
+        ).fetchall()
+        return {r["status"]: r["n"] for r in rows}
+    finally:
+        con.close()
 
 
 # --- HeyReach integration ---------------------------------------------------
