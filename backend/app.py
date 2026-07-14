@@ -1378,7 +1378,8 @@ def adjust_message(
             f"SUBJECT: <the subject line, or leave blank after the colon if the draft has no subject>\n"
             f"BODY:\n<the message body>\n\n"
             f"Keep Calvin's plain, direct voice and keep his sign-off. Follow the"
-            f" instruction but change nothing else. No markdown, no commentary."
+            f" instruction but change nothing else. No markdown, no commentary,"
+            f" and never use em dashes; use periods, commas, or colons instead."
         )
         output = _openrouter_rewrite(prompt)
         if not output:
