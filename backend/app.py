@@ -1202,9 +1202,10 @@ def _llm_rewrite(prompt: str) -> str:
             (
                 "https://api.moonshot.ai/v1/chat/completions",
                 kimi_key,
-                # kimi-k2.6 only accepts its default temperature
+                # highspeed variant: ~3s vs ~55s for kimi-k2.6 on this task;
+                # kimi models only accept their default temperature
                 {
-                    "model": "kimi-k2.6",
+                    "model": os.getenv("MOONSHOT_MODEL", "kimi-k2.7-code-highspeed"),
                     "messages": [{"role": "user", "content": prompt}],
                 },
             )
