@@ -1194,22 +1194,8 @@ OPENROUTER_MODELS = ["z-ai/glm-5.2", "moonshotai/kimi-k2.6"]
 
 
 def _llm_rewrite(prompt: str) -> str:
-    """Direct Moonshot (Kimi) first; OpenRouter (GLM, Kimi) as fallback."""
+    """GLM-5.2 via OpenRouter first (best prose); direct Moonshot Kimi as fallback."""
     attempts = []
-    kimi_key = os.getenv("MOONSHOT_API_KEY", "")
-    if kimi_key:
-        attempts.append(
-            (
-                "https://api.moonshot.ai/v1/chat/completions",
-                kimi_key,
-                # highspeed variant: ~3s vs ~55s for kimi-k2.6 on this task;
-                # kimi models only accept their default temperature
-                {
-                    "model": os.getenv("MOONSHOT_MODEL", "kimi-k2.7-code-highspeed"),
-                    "messages": [{"role": "user", "content": prompt}],
-                },
-            )
-        )
     or_key = os.getenv("OPENROUTER_API_KEY", "")
     if or_key:
         attempts.append(
@@ -1221,6 +1207,20 @@ def _llm_rewrite(prompt: str) -> str:
                     "models": OPENROUTER_MODELS,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.3,
+                },
+            )
+        )
+    kimi_key = os.getenv("MOONSHOT_API_KEY", "")
+    if kimi_key:
+        attempts.append(
+            (
+                "https://api.moonshot.ai/v1/chat/completions",
+                kimi_key,
+                # highspeed variant: ~3s vs ~55s for kimi-k2.6 on this task;
+                # kimi models only accept their default temperature
+                {
+                    "model": os.getenv("MOONSHOT_MODEL", "kimi-k2.7-code-highspeed"),
+                    "messages": [{"role": "user", "content": prompt}],
                 },
             )
         )
