@@ -1193,23 +1193,56 @@ class MessageAdjust(BaseModel):
 OPENROUTER_MODELS = ["z-ai/glm-5.2", "moonshotai/kimi-k2.6"]
 
 
-def _openrouter_rewrite(prompt: str) -> str:
-    api_key = os.getenv("OPENROUTER_API_KEY", "")
-    if not api_key:
-        raise HTTPException(status_code=503, detail="OPENROUTER_API_KEY not configured")
-    resp = requests.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers={"Authorization": f"Bearer {api_key}"},
-        json={
-            "model": OPENROUTER_MODELS[0],
-            "models": OPENROUTER_MODELS,
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.3,
-        },
-        timeout=60,
-    )
-    resp.raise_for_status()
-    return (resp.json()["choices"][0]["message"]["content"] or "").strip()
+def _llm_rewrite(prompt: str) -> str:
+    """Direct Moonshot (Kimi) first; OpenRouter (GLM, Kimi) as fallback."""
+    attempts = []
+    kimi_key = os.getenv("MOONSHOT_API_KEY", "")
+    if kimi_key:
+        attempts.append(
+            (
+                "https://api.moonshot.ai/v1/chat/completions",
+                kimi_key,
+                # kimi-k2.6 only accepts its default temperature
+                {
+                    "model": "kimi-k2.6",
+                    "messages": [{"role": "user", "content": prompt}],
+                },
+            )
+        )
+    or_key = os.getenv("OPENROUTER_API_KEY", "")
+    if or_key:
+        attempts.append(
+            (
+                "https://openrouter.ai/api/v1/chat/completions",
+                or_key,
+                {
+                    "model": OPENROUTER_MODELS[0],
+                    "models": OPENROUTER_MODELS,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.3,
+                },
+            )
+        )
+    if not attempts:
+        raise HTTPException(status_code=503, detail="No rewrite API key configured")
+    last_err = "no attempt made"
+    for url, api_key, payload in attempts:
+        try:
+            resp = requests.post(
+                url,
+                headers={"Authorization": f"Bearer {api_key}"},
+                json=payload,
+                timeout=60,
+            )
+            resp.raise_for_status()
+            content = (resp.json()["choices"][0]["message"]["content"] or "").strip()
+            if content:
+                return content
+            last_err = "empty model response"
+        except Exception as e:
+            last_err = str(e)
+            log.warning(f"rewrite via {url.split('/')[2]} failed: {e}")
+    raise HTTPException(status_code=502, detail=f"Rewrite failed: {last_err}")
 
 
 @app.post("/messages")
@@ -1381,9 +1414,7 @@ def adjust_message(
             f" instruction but change nothing else. No markdown, no commentary,"
             f" and never use em dashes; use periods, commas, or colons instead."
         )
-        output = _openrouter_rewrite(prompt)
-        if not output:
-            raise HTTPException(status_code=502, detail="Empty model response")
+        output = _llm_rewrite(prompt)
         new_subject, new_body = subject, output
         if "SUBJECT:" in output and "BODY:" in output:
             head, new_body = output.split("BODY:", 1)
