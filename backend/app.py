@@ -348,6 +348,8 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 .msg-recipient{font-size:12px;color:rgba(255,255,255,0.4);margin-top:2px}
 .msg-subject{font-size:15px;font-weight:600;color:rgba(255,255,255,0.85);margin-top:16px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,0.1)}
 .msg-body{font-size:14px;color:rgba(255,255,255,0.75);line-height:1.6;white-space:pre-wrap;margin-top:12px}
+.msg-subject[contenteditable],.msg-body[contenteditable]{user-select:text;-webkit-user-select:text;cursor:text;border-radius:8px;transition:background 0.15s}
+.msg-subject[contenteditable]:focus,.msg-body[contenteditable]:focus{outline:none;background:rgba(255,255,255,0.06);box-shadow:0 0 0 8px rgba(255,255,255,0.06)}
 .msg-evidence{margin-top:16px;background:rgba(255,200,0,0.06);border:1px solid rgba(255,200,0,0.2);border-radius:8px;padding:12px}
 .msg-evidence .detail-label{color:#ffc800}
 .msg-evidence-item{font-size:12px;color:rgba(255,255,255,0.65);line-height:1.5;margin-top:6px}
@@ -457,9 +459,33 @@ function makeMessageCard(m,isTop){
     (m.recipient?'<div class="msg-recipient">To: '+esc(m.recipient)+'</div>':'')+due+
     (m.subject?'<div class="msg-subject">'+esc(m.subject)+'</div>':'')+
     '<div class="msg-body">'+esc(m.body||'')+'</div>'+ev+
-    '<div class="msg-hint">SWIPE RIGHT TO APPROVE SEND / LEFT TO REJECT</div>'+
+    '<div class="msg-hint">'+(isReview?'SWIPE RIGHT TO APPROVE SEND / LEFT TO REJECT':'TAP TEXT TO EDIT / SWIPE RIGHT TO SEND / LEFT TO REJECT')+'</div>'+
     '</div>';
+  if(isTop&&!isReview) makeMsgEditable(c,m);
   return c;
+}
+
+function makeMsgEditable(c,m){
+  [['.msg-subject','subject'],['.msg-body','body']].forEach(function(pair){
+    const el=c.querySelector(pair[0]), field=pair[1];
+    if(!el) return;
+    el.setAttribute('contenteditable','true');
+    el.setAttribute('spellcheck','false');
+    el.addEventListener('input',function(){
+      m[field]=el.innerText;
+      m._dirty=true;
+      clearTimeout(m._saveT);
+      m._saveT=setTimeout(function(){saveMsgEdits(m)},800);
+    });
+    el.addEventListener('blur',function(){saveMsgEdits(m)});
+  });
+}
+
+function saveMsgEdits(m){
+  clearTimeout(m._saveT);
+  if(!m._dirty) return;
+  m._dirty=false;
+  api('/messages/'+m.id+'/edit',{subject:m.subject,body:m.body});
 }
 
 // ── Swipe Logic (simple, no races) ──
@@ -476,12 +502,15 @@ function doSwipe(dir){
 
   if(swipedProfile._msg){
     // Message approval card: swipe records the decision, no email overlay.
+    // Any tap-to-edit text rides along so the approved version is final.
     const stamp=dir==='left'?'.stamp-nope':'.stamp-like';
     card.querySelector(stamp).style.opacity='1';
     card.classList.add(dir==='left'?'exit-left':'exit-right');
     lastIdx=swipedIdx; idx++;
     incDaily();
-    api('/messages/'+swipedProfile.id+'/swipe',{direction:dir});
+    clearTimeout(swipedProfile._saveT);
+    swipedProfile._dirty=false;
+    api('/messages/'+swipedProfile.id+'/swipe',{direction:dir,subject:swipedProfile.subject,body:swipedProfile.body});
     setTimeout(render,400);
     return;
   }
@@ -518,7 +547,7 @@ stackEl.addEventListener('pointerdown',function(e){
   if(locked) return;
   const card=stackEl.querySelector('.card.top');
   if(!card||!card.contains(e.target)) return;
-  if(e.target.closest('.detail-links,.card-below a')) return;
+  if(e.target.closest('.detail-links,.card-below a,[contenteditable="true"]')) return;
 
   const sx=e.clientX, sy=e.clientY;
   let dx=0, active=false;
@@ -630,6 +659,7 @@ $('btnInfo').onclick=()=>{const c=stackEl.querySelector('.card.top');if(c)c.scro
 
 document.addEventListener('keydown',e=>{
   if($('emailOverlay').classList.contains('visible')) return;
+  if(document.activeElement&&document.activeElement.isContentEditable) return;
   if(e.key==='ArrowLeft') doSwipe('left');
   if(e.key==='ArrowRight') doSwipe('right');
   if(e.key==='ArrowUp'||e.key==='ArrowDown') $('btnInfo').click();
@@ -1108,6 +1138,14 @@ class MessageIn(BaseModel):
 
 class MessageSwipe(BaseModel):
     direction: str  # "right" = approve, "left" = reject
+    # Final tap-to-edit text flushed at swipe time; None means unchanged.
+    subject: Optional[str] = None
+    body: Optional[str] = None
+
+
+class MessageEdit(BaseModel):
+    subject: Optional[str] = None
+    body: Optional[str] = None
 
 
 @app.post("/messages")
@@ -1195,8 +1233,45 @@ def swipe_message(
         if not row:
             raise HTTPException(status_code=404, detail="Message not found")
         con.execute(
-            "UPDATE messages SET status = ?, swiped_at = ? WHERE id = ?",
-            (new_status, datetime.now(timezone.utc).isoformat(), message_id),
+            "UPDATE messages SET status = ?, swiped_at = ?,"
+            " subject = COALESCE(?, subject), body = COALESCE(?, body)"
+            " WHERE id = ?",
+            (
+                new_status,
+                datetime.now(timezone.utc).isoformat(),
+                swipe.subject,
+                swipe.body,
+                message_id,
+            ),
+        )
+        con.commit()
+        return _msg_row_to_dict(
+            con.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
+        )
+    finally:
+        con.close()
+
+
+@app.post("/messages/{message_id}/edit")
+def edit_message(
+    message_id: int, edit: MessageEdit, _auth: None = Depends(verify_api_key)
+):
+    """Persist tap-to-edit changes from the swipe UI while a card is pending."""
+    con = _msg_db()
+    try:
+        row = con.execute(
+            "SELECT * FROM messages WHERE id = ?", (message_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Message not found")
+        if row["status"] != "pending":
+            raise HTTPException(
+                status_code=400, detail=f"Cannot edit message in status {row['status']}"
+            )
+        con.execute(
+            "UPDATE messages SET subject = COALESCE(?, subject),"
+            " body = COALESCE(?, body) WHERE id = ?",
+            (edit.subject, edit.body, message_id),
         )
         con.commit()
         return _msg_row_to_dict(
