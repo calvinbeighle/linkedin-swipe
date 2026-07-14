@@ -350,6 +350,14 @@ body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#111;colo
 .msg-body{font-size:14px;color:rgba(255,255,255,0.75);line-height:1.6;white-space:pre-wrap;margin-top:12px}
 .msg-subject[contenteditable],.msg-body[contenteditable]{user-select:text;-webkit-user-select:text;cursor:text;border-radius:8px;transition:background 0.15s}
 .msg-subject[contenteditable]:focus,.msg-body[contenteditable]:focus{outline:none;background:rgba(255,255,255,0.06);box-shadow:0 0 0 8px rgba(255,255,255,0.06)}
+.msg-adjust-row{display:flex;gap:8px;margin-top:18px}
+.msg-adjust-row input{flex:1;padding:10px 14px;border:1px solid rgba(255,255,255,0.12);border-radius:20px;background:rgba(255,255,255,0.05);color:rgba(255,255,255,0.85);font-size:13px;outline:none;user-select:text;-webkit-user-select:text}
+.msg-adjust-row input::placeholder{color:rgba(255,255,255,0.3)}
+.msg-adjust-row input:focus{border-color:rgba(255,255,255,0.25)}
+.msg-adjust-row button{padding:10px 18px;border:none;border-radius:20px;background:rgba(150,170,190,0.2);color:rgba(150,170,190,0.9);font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
+.msg-adjust-row button:disabled{opacity:0.5}
+.msg-adjust-loading{display:none;font-size:12px;color:rgba(255,255,255,0.4);margin-top:8px;text-align:center}
+.msg-adjust-loading.visible{display:block}
 .msg-evidence{margin-top:16px;background:rgba(255,200,0,0.06);border:1px solid rgba(255,200,0,0.2);border-radius:8px;padding:12px}
 .msg-evidence .detail-label{color:#ffc800}
 .msg-evidence-item{font-size:12px;color:rgba(255,255,255,0.65);line-height:1.5;margin-top:6px}
@@ -459,6 +467,7 @@ function makeMessageCard(m,isTop){
     (m.recipient?'<div class="msg-recipient">To: '+esc(m.recipient)+'</div>':'')+due+
     (m.subject?'<div class="msg-subject">'+esc(m.subject)+'</div>':'')+
     '<div class="msg-body">'+esc(m.body||'')+'</div>'+ev+
+    (isTop&&!isReview?'<div class="msg-adjust-row"><input type="text" placeholder="Adjust with AI, e.g. make it shorter..."><button>Adjust</button></div><div class="msg-adjust-loading">Rewriting...</div>':'')+
     '<div class="msg-hint">'+(isReview?'SWIPE RIGHT TO APPROVE SEND / LEFT TO REJECT':'TAP TEXT TO EDIT / SWIPE RIGHT TO SEND / LEFT TO REJECT')+'</div>'+
     '</div>';
   if(isTop&&!isReview) makeMsgEditable(c,m);
@@ -479,6 +488,11 @@ function makeMsgEditable(c,m){
     });
     el.addEventListener('blur',function(){saveMsgEdits(m)});
   });
+  const btn=c.querySelector('.msg-adjust-row button'),inp=c.querySelector('.msg-adjust-row input');
+  if(btn&&inp){
+    btn.addEventListener('click',function(){adjustMsg(m,c)});
+    inp.addEventListener('keydown',function(e){if(e.key==='Enter')adjustMsg(m,c)});
+  }
 }
 
 function saveMsgEdits(m){
@@ -486,6 +500,26 @@ function saveMsgEdits(m){
   if(!m._dirty) return;
   m._dirty=false;
   api('/messages/'+m.id+'/edit',{subject:m.subject,body:m.body});
+}
+
+async function adjustMsg(m,c){
+  const inp=c.querySelector('.msg-adjust-row input'),btn=c.querySelector('.msg-adjust-row button'),ld=c.querySelector('.msg-adjust-loading');
+  const v=inp.value.trim();
+  if(!v||m._adjusting) return;
+  m._adjusting=true;btn.disabled=inp.disabled=true;
+  ld.textContent='Rewriting...';ld.classList.add('visible');
+  try{
+    const r=await fetch(BASE+'/messages/'+m.id+'/adjust',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+API_KEY},body:JSON.stringify({instruction:v,subject:m.subject,body:m.body})});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    if(typeof d.subject==='string'){m.subject=d.subject;const el=c.querySelector('.msg-subject');if(el)el.textContent=d.subject}
+    if(typeof d.body==='string'){m.body=d.body;const el=c.querySelector('.msg-body');if(el)el.textContent=d.body}
+    m._dirty=false; // server already persisted the rewrite
+    inp.value='';
+    ld.textContent='Done';
+  }catch(e){ld.textContent='Failed -- try again'}
+  m._adjusting=false;btn.disabled=inp.disabled=false;
+  setTimeout(function(){ld.classList.remove('visible')},1500);
 }
 
 // ── Swipe Logic (simple, no races) ──
@@ -547,7 +581,7 @@ stackEl.addEventListener('pointerdown',function(e){
   if(locked) return;
   const card=stackEl.querySelector('.card.top');
   if(!card||!card.contains(e.target)) return;
-  if(e.target.closest('.detail-links,.card-below a,[contenteditable="true"]')) return;
+  if(e.target.closest('.detail-links,.card-below a,[contenteditable="true"],.msg-adjust-row')) return;
 
   const sx=e.clientX, sy=e.clientY;
   let dx=0, active=false;
@@ -659,7 +693,7 @@ $('btnInfo').onclick=()=>{const c=stackEl.querySelector('.card.top');if(c)c.scro
 
 document.addEventListener('keydown',e=>{
   if($('emailOverlay').classList.contains('visible')) return;
-  if(document.activeElement&&document.activeElement.isContentEditable) return;
+  if(document.activeElement&&(document.activeElement.isContentEditable||/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName))) return;
   if(e.key==='ArrowLeft') doSwipe('left');
   if(e.key==='ArrowRight') doSwipe('right');
   if(e.key==='ArrowUp'||e.key==='ArrowDown') $('btnInfo').click();
@@ -1148,6 +1182,36 @@ class MessageEdit(BaseModel):
     body: Optional[str] = None
 
 
+class MessageAdjust(BaseModel):
+    instruction: str
+    # Current card text from the UI (may include unsaved tap-to-edit changes);
+    # falls back to the stored row when omitted.
+    subject: Optional[str] = None
+    body: Optional[str] = None
+
+
+OPENROUTER_MODELS = ["z-ai/glm-5.2", "moonshotai/kimi-k2.6"]
+
+
+def _openrouter_rewrite(prompt: str) -> str:
+    api_key = os.getenv("OPENROUTER_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="OPENROUTER_API_KEY not configured")
+    resp = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={
+            "model": OPENROUTER_MODELS[0],
+            "models": OPENROUTER_MODELS,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3,
+        },
+        timeout=60,
+    )
+    resp.raise_for_status()
+    return (resp.json()["choices"][0]["message"]["content"] or "").strip()
+
+
 @app.post("/messages")
 def ingest_messages(items: List[MessageIn], _auth: None = Depends(verify_api_key)):
     """Idempotent bulk ingest keyed on source_ref."""
@@ -1272,6 +1336,65 @@ def edit_message(
             "UPDATE messages SET subject = COALESCE(?, subject),"
             " body = COALESCE(?, body) WHERE id = ?",
             (edit.subject, edit.body, message_id),
+        )
+        con.commit()
+        return _msg_row_to_dict(
+            con.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
+        )
+    finally:
+        con.close()
+
+
+@app.post("/messages/{message_id}/adjust")
+def adjust_message(
+    message_id: int, req: MessageAdjust, _auth: None = Depends(verify_api_key)
+):
+    """Rewrite a pending draft per the user's instruction (GLM via OpenRouter)."""
+    con = _msg_db()
+    try:
+        row = con.execute(
+            "SELECT * FROM messages WHERE id = ?", (message_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Message not found")
+        if row["status"] != "pending":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot adjust message in status {row['status']}",
+            )
+        subject = req.subject if req.subject is not None else row["subject"]
+        body = req.body if req.body is not None else row["body"]
+        what = (
+            "cold outreach email" if row["channel"] == "email" else "LinkedIn message"
+        )
+        prompt = (
+            f"You are rewriting a {what}. The current draft is:\n\n"
+            + (f"Subject: {subject}\n\n" if subject else "")
+            + f"{body}\n\n"
+            f"Context: this message is from Calvin to {row['name'] or 'a lead'}"
+            f"{(' at ' + row['company']) if row['company'] else ''}.\n\n"
+            f"User instruction: {req.instruction}\n\n"
+            f"Return the result in exactly this format (one line then the body):\n"
+            f"SUBJECT: <the subject line, or leave blank after the colon if the draft has no subject>\n"
+            f"BODY:\n<the message body>\n\n"
+            f"Keep Calvin's plain, direct voice and keep his sign-off. Follow the"
+            f" instruction but change nothing else. No markdown, no commentary."
+        )
+        output = _openrouter_rewrite(prompt)
+        if not output:
+            raise HTTPException(status_code=502, detail="Empty model response")
+        new_subject, new_body = subject, output
+        if "SUBJECT:" in output and "BODY:" in output:
+            head, new_body = output.split("BODY:", 1)
+            head = head.strip()
+            if head.startswith("SUBJECT:"):
+                parsed = head[len("SUBJECT:") :].strip()
+                if subject:  # never invent a subject for subject-less drafts
+                    new_subject = parsed or subject
+            new_body = new_body.strip()
+        con.execute(
+            "UPDATE messages SET subject = ?, body = ? WHERE id = ?",
+            (new_subject, new_body, message_id),
         )
         con.commit()
         return _msg_row_to_dict(
